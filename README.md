@@ -40,13 +40,64 @@ Its dependencies (numpy, opencv, imageio-ffmpeg, pyyaml, trimesh, networkx, scip
 Only stage 1 needs Isaac Sim; the Cosmos tools, `visualize.py` and the tests run in any Python 3.12 environment
 with those packages.
 
-## Quick start
+## One command: `scripts/run_pipeline.sh`
+
+`run_pipeline.sh` runs everything from a CAD folder to an imported Cosmos dataset: render the clips in Isaac Sim,
+build the Cosmos batch, upload it to the DGX Spark, run Cosmos there, copy the outputs back, and import them with
+label previews. Run it from the `worldsynth` folder:
+
+```bash
+cd ~/research/isaaclab/worldsynth
+scripts/run_pipeline.sh --cad /path/to/stl_folder --name run_001 --clips 20
+```
+
+Example: the LEGO pieces in this repo, one clip at Cosmos 480 (about 30 s in Isaac Sim, about 36 min on the Spark).
+The `--set` lines adapt the scene to small plastic parts: a closer camera, a smaller placement area, glossy plastic
+instead of metal, and smaller clutter.
+
+```bash
+scripts/run_pipeline.sh --cad cad_lego --name lego_480 --clips 1 --res 480 --units mm \
+  --prompts configs/cosmos/lego/lego_bench.json --negative configs/cosmos/lego/negative_prompt.json \
+  --set "camera.distance=[0.25,0.5]" --set "camera.distance_sweep=[-0.08,0.08]" --set "camera.target_jitter=0.04" \
+  --set "scene.placement_area=[[-0.12,0.12],[-0.08,0.08]]" --set "scene.parts_per_clip=[5,10]" \
+  --set "scene.max_instances_per_class=2" --set "scene.min_spacing=0.005" \
+  --set "randomization.part_material.randomize_prob=1.0" --set "randomization.part_material.metal_prob=0.0" \
+  --set "randomization.part_material.paint_roughness=[0.05,0.35]" --set "randomization.clutter.size=[0.01,0.04]"
+```
+
+| Option | Meaning |
+|---|---|
+| `--cad DIR` | Folder with CAD/STL files |
+| `--name NAME` | Dataset goes to `output/NAME`, the Cosmos batch to `output/NAME_cosmos` |
+| `--clips N`, `--frames N` | Number of clips (default 20) and frames per clip (default 61) |
+| `--res 256\|480` | Cosmos resolution; also sets the matching render size (256: 1200x720, ~3 min per clip; 480: 1248x720, ~36 min per clip) |
+| `--steps N` | Cosmos sampling steps (default 50) |
+| `--looks N` | Prompts (looks) per clip (default 1) |
+| `--prompts FILE`, `--negative FILE` | Cosmos look prompt(s) and negative prompt (default: `configs/cosmos/`) |
+| `--no-clutter` | Render without clutter |
+| `--units mm\|m\|cm\|inch\|auto` | CAD units (default auto) |
+| `--class-from file\|folder` | Class per file name (default) or per parent folder |
+| `--set KEY=VALUE` | Any config override, repeatable |
+| `--skip-sim` | Reuse the rendered dataset (only the Cosmos part) |
+| `--skip-cosmos` | Only render the dataset |
+
+- **Resuming:** re-running with the same `--name` keeps finished clips, finished Cosmos jobs and copied outputs. If
+  the workstation or the connection drops while Cosmos runs, Cosmos keeps running on the Spark; re-run the same
+  command with `--skip-sim` to wait for it and copy the results back.
+- **Background:** for long runs, start it detached so closing the terminal does not stop it:
+  `nohup scripts/run_pipeline.sh ... > run_001.log 2>&1 &` and follow it with `tail -f run_001.log`.
+- **SSH:** the Spark password is asked once per run (`ssh-copy-id h@100.123.185.58` removes the prompt).
+  `SPARK` and `ISAACLAB_DIR` override the Spark address and the Isaac Lab checkout.
+- **Results:** `output/NAME/annotations/` (COCO for rendered, Cosmos and both), `output/NAME/viz/` (label preview
+  videos), `output/NAME_cosmos/results/` (raw Cosmos outputs).
+
+## Quick start (step by step)
 
 ```bash
 cd ~/research/isaaclab/IsaacLab
 .venv/bin/python ../worldsynth/scripts/make_example_cad.py ../worldsynth/cad_examples     # or use your CAD folder
 
-# stage 1: 20 clips x 61 frames at 1280x720 (~20 s per clip on an RTX PRO 5000 laptop GPU)
+# stage 1: 20 clips x 61 frames at 1248x720 (~20 s per clip on an RTX PRO 5000 laptop GPU)
 .venv/bin/python ../worldsynth/scripts/generate.py --config ../worldsynth/configs/default.yaml \
     cad.dir=../worldsynth/cad_examples output.dir=../worldsynth/output/run_000
 
