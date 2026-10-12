@@ -1,0 +1,9 @@
+{
+  "style_medium": "Clean 3D render, CGI, video game graphics, simulation screenshot, Isaac Sim or Unreal Engine look, product photography, studio shoot, toy commercial",
+  "artistic_style": "Matte flat-shaded clay look, perfectly uniform materials, cinematic color grading, HDR look, over-sharpened, airbrushed",
+  "lighting": "Perfect studio lighting, flawless soft boxes, pure white featureless background",
+  "cinematography": "Shallow depth of field, bokeh, macro blur, dramatic camera moves, rolling shutter wobble",
+  "subjects": "Pieces morphing, moving, sliding, rotating or changing shape between frames, pieces appearing or disappearing, pieces changing size, number or color, extra LEGO pieces or bricks on the table, minifigures, built LEGO models, floating objects, objects passing through each other, melted geometry, metal pieces",
+  "temporal": "Flickering textures, swimming patterns on surfaces, shimmering outlines, sudden lighting or color jumps",
+  "quality": "Heavy compression artifacts, severe blur, low-detail muddy textures, watermarks, text overlays, logos"
+}

@@ -1,0 +1,34 @@
+{
+  "subjects": [
+    {
+      "description": "Precision components ({parts}) on an assembly workbench in an electronics manufacturing line",
+      "appearance_details": "Real production parts: anodized aluminium housings, stainless steel inserts, black and white plastic mouldings, small printed labels, fine surface texture and slight fingerprints",
+      "relationship": "Parts ready to be picked by a robot and placed in a test rig",
+      "location": "Spread over the bench top",
+      "relative_size": "Small to medium within frame",
+      "pose": "Resting on the bench in stable positions",
+      "action": "Static, nothing moves except the camera"
+    }
+  ],
+  "background_setting": "A clean but used ESD assembly area: light grey or blue anti-static mat on the bench, ESD-safe trays, a test rig and a monitor in the background, white walls and cable ducts",
+  "lighting": {
+    "conditions": "Even cool-white fluorescent and LED panel lighting",
+    "direction": "Overhead and slightly from the front",
+    "shadows": "Soft, low-contrast shadows under the parts"
+  },
+  "aesthetics": {
+    "composition": "Functional top-down-ish view with every part visible",
+    "color_scheme": "Light greys, blue mat, metal and black plastic",
+    "mood_atmosphere": "Orderly, realistic electronics production"
+  },
+  "cinematography": {
+    "camera_motion": "Slow, smooth handheld-free camera move around the bench, like an industrial camera on a slowly moving robot arm",
+    "framing": "Close to medium shot of the bench top with all parts in frame",
+    "camera_angle": "High angle looking down at the bench",
+    "depth_of_field": "Deep focus, all parts sharp as with a machine-vision camera",
+    "lens_focal_length": "Machine-vision lens, natural perspective, slight vignetting"
+  },
+  "style_medium": "Raw footage from a real industrial camera, unedited, no color grading",
+  "artistic_style": "Photorealistic, authentic real-world recording: realistic materials, faint sensor noise, accurate colors",
+  "context": "Footage from a robot cell that loads a test rig in a Brainport high-tech SME"
+}

@@ -1,0 +1,34 @@
+{
+  "subjects": [
+    {
+      "description": "Real LEGO plastic pieces ({parts}) lying on a workbench in a small automation test cell",
+      "appearance_details": "Genuine injection-moulded ABS LEGO elements: glossy, saturated solid colors (red, blue, yellow, black, white, transparent), crisp moulded edges, small mould marks, faint scratches and fingerprints, transparent pieces show refraction and reflections",
+      "relationship": "Pieces waiting to be picked by a small robot gripper",
+      "location": "Spread over the bench top",
+      "relative_size": "Small within frame",
+      "pose": "Resting on the bench in stable positions",
+      "action": "Static, nothing moves except the camera"
+    }
+  ],
+  "background_setting": "A real lab workbench: grey or dark anti-static mat or a worn wooden/laminate bench top, a few cables, a robot base and a small conveyor partly visible in the background, lab walls",
+  "lighting": {
+    "conditions": "Mixed LED ceiling light and a desk lamp, neutral to warm",
+    "direction": "Overhead and from one side",
+    "shadows": "Soft contact shadows under each piece, bright specular highlights on the glossy plastic"
+  },
+  "aesthetics": {
+    "composition": "Close-up view of the bench with all pieces visible",
+    "color_scheme": "Bright LEGO colors against a muted bench",
+    "mood_atmosphere": "Realistic, everyday lab work"
+  },
+  "cinematography": {
+    "camera_motion": "Slow, smooth camera move around the bench, like a camera on a slowly moving robot arm",
+    "framing": "Close-up of the bench top",
+    "camera_angle": "High angle looking down at the bench",
+    "depth_of_field": "Deep focus, all pieces sharp",
+    "lens_focal_length": "Machine-vision lens, natural perspective"
+  },
+  "style_medium": "Raw footage from a real industrial camera, unedited, no color grading",
+  "artistic_style": "Photorealistic, authentic real-world recording: real materials, natural light falloff, faint sensor noise, accurate colors",
+  "context": "Footage from a robot pick-and-place test cell handling LEGO pieces"
+}

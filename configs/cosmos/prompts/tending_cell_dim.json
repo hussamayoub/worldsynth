@@ -1,0 +1,34 @@
+{
+  "subjects": [
+    {
+      "description": "Metal and plastic parts ({parts}) on a fixture table inside a robot machine tending cell",
+      "appearance_details": "Real parts with varied finishes: bead-blasted aluminium, polished steel with strong reflections, dark coated parts, slight dust and wear",
+      "relationship": "Parts staged for a robot to load into a machine",
+      "location": "Spread over the table",
+      "relative_size": "Small to medium within frame",
+      "pose": "Resting on the table in stable positions",
+      "action": "Static, nothing moves except the camera"
+    }
+  ],
+  "background_setting": "Inside a fenced robot cell: a dark steel fixture table with bolt holes and scratches, mesh safety fence, machine enclosure panels and a light curtain post in the background",
+  "lighting": {
+    "conditions": "Dimmer, warmer light from one strong lamp inside the cell plus weak ambient hall light",
+    "direction": "From one side and above",
+    "shadows": "Harder, longer shadows and strong highlights on shiny metal"
+  },
+  "aesthetics": {
+    "composition": "Functional view of the table with every part visible",
+    "color_scheme": "Dark steel, warm highlights, muted colors",
+    "mood_atmosphere": "Realistic, slightly dim production environment"
+  },
+  "cinematography": {
+    "camera_motion": "Slow, smooth handheld-free camera move around the bench, like an industrial camera on a slowly moving robot arm",
+    "framing": "Close to medium shot of the bench top with all parts in frame",
+    "camera_angle": "High angle looking down at the bench",
+    "depth_of_field": "Deep focus, all parts sharp as with a machine-vision camera",
+    "lens_focal_length": "Machine-vision lens, natural perspective, slight vignetting"
+  },
+  "style_medium": "Raw footage from a real industrial camera, unedited, no color grading",
+  "artistic_style": "Photorealistic, authentic real-world recording with visible sensor noise in the darker areas",
+  "context": "Footage from a robotic machine tending cell during a late shift"
+}

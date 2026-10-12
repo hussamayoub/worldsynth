@@ -1,0 +1,10 @@
+{
+  "style_medium": "Clean 3D render, CGI, video game graphics, simulation screenshot, Isaac Sim or Unreal Engine look, product photography, studio shoot",
+  "artistic_style": "Plastic-looking flat-shaded surfaces, perfectly uniform materials, cinematic color grading, HDR look, over-sharpened, airbrushed, overly saturated colors",
+  "lighting": "Perfect studio lighting, flawless soft boxes, pure white featureless background",
+  "cinematography": "Shallow depth of field, bokeh, dramatic camera moves, rolling shutter wobble",
+  "subjects": "Parts morphing, moving, sliding, rotating or changing shape between frames, parts appearing or disappearing, parts changing size, number or color, extra objects on the table, floating objects, objects passing through each other, melted geometry",
+  "temporal": "Flickering textures, swimming patterns on surfaces, shimmering outlines, sudden lighting or color jumps",
+  "quality": "Heavy compression artifacts, severe blur, low-detail muddy textures, watermarks, text overlays, logos",
+  "condition": "Scrapyard, heavily rusted metal, filthy or abandoned facility, debris piles, broken equipment"
+}

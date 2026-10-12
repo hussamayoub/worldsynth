@@ -1,0 +1,74 @@
+# WorldSynth generation config. Every key is optional; missing keys use the defaults in src/worldsynth/config.py.
+# Ranges are [min, max], sampled uniformly per clip. Lengths in meters, angles in degrees.
+# Relative paths are resolved against the current working directory.
+# Override any key on the command line: generate.py --config this.yaml dataset.num_clips=5 camera.distance=[0.4,0.7]
+
+cad:
+  dir: cad                    # folder searched recursively: STEP/IGES/SolidWorks/... (HOOPS), OBJ/STL/FBX/glTF, USD
+  cache_dir: cache/usd        # converted USD files; reused while the source file is unchanged
+  units: auto                 # auto | m | cm | mm | inch  (auto: file metadata; parts > 2 m are assumed to be in mm)
+  class_from: file            # file: class = file name | folder: class = parent folder (several files per class)
+  tessellation_lod: 2         # B-rep tessellation 0 (coarse) .. 4 (fine)
+
+output:
+  dir: output/run_000
+  seed: 0                     # clip i uses seed (seed, i): runs are reproducible and resumable
+  overwrite: false            # false: finished clips in output.dir are kept, the rest is generated
+
+dataset:
+  num_clips: 20               # randomized scenes; each clip = fixed scene + moving camera (one Cosmos video)
+  frames_per_clip: 61
+  fps: 20
+  resolution: [1248, 720]     # must match the Cosmos output aspect (Cosmos crops to it): 1248x720 for 480p
+                              # (832x480), 1200x720 for 256 (320x192)
+  renderer: realtime          # realtime | pathtracing (better metal reflections, much slower)
+  antialiasing: DLAA          # DLAA renders at native resolution; DLSS would upscale from a lower one
+  path_tracing_spp: 64
+  rt_subframes: 8             # render subframes per frame (removes denoiser ghosting)
+  warmup_frames: 4
+  annotations: [depth, segmentation]  # extra outputs; add normals if needed. rgb, instance, semantic, boxes and
+                                      # poses are always written. depth + segmentation feed the Cosmos controls.
+  min_visible_fraction: 0.05  # objects less visible than this are flagged ignore (iscrowd in COCO)
+  coco_segmentation: rle      # rle (exact) | polygon
+
+scene:
+  environment_usd: null       # optional USD of the machine tending cell (machine, fixtures, robot)
+  environment_pose: [0, 0, 0, 0]   # x, y, z, yaw
+  table:
+    size: [1.2, 0.8, 0.75]    # table top x, y and height
+  walls: true
+  parts_per_clip: [3, 8]
+  max_instances_per_class: 3
+  placement_area: [[-0.3, 0.3], [-0.2, 0.2]]  # x, y range on the table top
+  pose_mode: stable           # stable (physical resting poses) | flat (6 box faces) | upright (CAD z up)
+  min_spacing: 0.01
+
+randomization:
+  lighting:
+    dome_intensity: [200, 1200]
+    dome_color_temperature: [4000, 7500]   # K
+    num_lights: [1, 3]                     # ceiling rect lights
+    light_intensity: [3000, 25000]
+    light_color_temperature: [3000, 6500]
+    light_height: [1.6, 2.6]
+    light_size: [0.2, 1.2]
+  part_material:
+    randomize_prob: 0.8       # else keep the CAD material
+    metal_prob: 0.6           # metal vs painted/anodized/plastic
+    metal_roughness: [0.15, 0.55]
+    paint_roughness: [0.3, 0.9]
+  clutter:
+    enabled: true             # false: same scenes (same seed) without clutter
+    count: [0, 8]             # distractor primitives on the table (not labelled)
+    size: [0.02, 0.12]
+  surface_roughness: [0.3, 0.95]
+
+camera:
+  distance: [0.45, 0.9]       # from the look-at target
+  elevation: [35, 75]
+  azimuth: [-70, 70]          # 0 = in front of the table looking along +x
+  azimuth_sweep: [-35, 35]    # camera motion over one clip; set sweeps to [0, 0] for a static camera
+  elevation_sweep: [-10, 10]
+  distance_sweep: [-0.15, 0.15]
+  focal_length: [18, 35]      # mm, 20.955 mm horizontal aperture
+  target_jitter: 0.08

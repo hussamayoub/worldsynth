@@ -1,0 +1,34 @@
+{
+  "subjects": [
+    {
+      "description": "Machined metal workpieces ({parts}) lying on a workbench next to a CNC machining centre",
+      "appearance_details": "Real machined parts: milled and turned aluminium and steel with fine tool marks, slightly dull edges, a thin film of cutting fluid on some surfaces, small burrs and light scratches, a few anodized or painted parts",
+      "relationship": "Finished parts waiting to be loaded into the machine by a robot",
+      "location": "Spread over the bench top",
+      "relative_size": "Small to medium within frame",
+      "pose": "Resting flat on the bench in stable positions",
+      "action": "Static, nothing moves except the camera"
+    }
+  ],
+  "background_setting": "A working CNC machine shop: a steel workbench with a worn grey or dark rubber surface, metal chips and faint oil stains, the sliding door and control panel of a machining centre nearby, tool trolleys, a concrete floor with yellow safety tape",
+  "lighting": {
+    "conditions": "Bright industrial LED high-bay lighting, neutral white, slightly uneven",
+    "direction": "Overhead from several fixtures",
+    "shadows": "Soft contact shadows under each part, small specular highlights on machined metal"
+  },
+  "aesthetics": {
+    "composition": "Functional view of the bench with every part visible",
+    "color_scheme": "Natural industrial greys and metal tones with occasional colored anodized parts",
+    "mood_atmosphere": "Realistic, everyday production work"
+  },
+  "cinematography": {
+    "camera_motion": "Slow, smooth handheld-free camera move around the bench, like an industrial camera on a slowly moving robot arm",
+    "framing": "Close to medium shot of the bench top with all parts in frame",
+    "camera_angle": "High angle looking down at the bench",
+    "depth_of_field": "Deep focus, all parts sharp as with a machine-vision camera",
+    "lens_focal_length": "Machine-vision lens, natural perspective, slight vignetting"
+  },
+  "style_medium": "Raw footage from a real industrial camera, unedited, no color grading",
+  "artistic_style": "Photorealistic, authentic real-world recording: real materials, natural light falloff, faint sensor noise, accurate colors, ordinary signs of use",
+  "context": "Footage from a robotic machine tending cell in a small high-tech manufacturing company"
+}

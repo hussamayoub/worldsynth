@@ -1,0 +1,40 @@
+[build-system]
+requires = ["uv_build>=0.12.6,<0.13"]
+build-backend = "uv_build"
+
+[project]
+name = "worldsynth"
+version = "0.1.0"
+description = "WorldSynth: CAD-to-dataset synthetic data generation with Isaac Sim and Cosmos Transfer for robotic machine tending."
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+# Isaac Sim / Isaac Lab are provided by the IsaacLab .venv this package is installed into (see README).
+dependencies = [
+    "numpy>=2",
+    "pyyaml>=6",
+    "imageio[ffmpeg]>=2.30",
+    "opencv-python-headless>=4.8",
+    "trimesh>=4",
+    "networkx>=3",  # trimesh stable poses
+    "scipy>=1.10",
+]
+
+[dependency-groups]
+dev = ["pytest>=8.3", "ruff>=0.11"]
+
+[tool.uv.build-backend]
+module-name = "worldsynth"
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.ruff.lint.per-file-ignores]
+"scripts/**/*.py" = ["E402"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
