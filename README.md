@@ -90,8 +90,31 @@ scripts/run_pipeline.sh --cad cad_lego --name lego_480 --clips 1 --res 480 --uni
   `SPARK` and `ISAACLAB_DIR` override the Spark address and the Isaac Lab checkout.
 - **Results:** `output/NAME/annotations/` (COCO for rendered, Cosmos and both), `output/NAME/viz/` (label preview
   videos), `output/NAME/viz/side_by_side_rgb_cosmos/<clip>.mp4` (render | Cosmos | labels, every clip),
-  `output/NAME_cosmos/results/` (raw Cosmos outputs). For an existing dataset:
-  `python scripts/visualize.py output/NAME --image_dir rgb_cosmos --all_clips --side_by_side`.
+  `output/NAME_cosmos/results/` (raw Cosmos outputs).
+
+## Viewing results and side-by-side videos
+
+`scripts/visualize.py` draws the labels (masks, 2D boxes, 3D boxes, pose axes) on the images. Run it from the
+`worldsynth` folder with the Isaac Lab Python (`PY=~/research/isaaclab/IsaacLab/.venv/bin/python`):
+
+```bash
+# side by side: render | Cosmos | Cosmos with labels, one mp4 per clip, all frames
+$PY scripts/visualize.py output/NAME --image_dir rgb_cosmos --all_clips --side_by_side
+#   -> output/NAME/viz/side_by_side_rgb_cosmos/clip_0000.mp4, clip_0001.mp4, ...
+
+# only some clips
+$PY scripts/visualize.py output/NAME --image_dir rgb_cosmos --clip 0 3 --side_by_side
+
+# labels on the rendered images or the Cosmos images, as a video per clip
+$PY scripts/visualize.py output/NAME --image_dir rgb --clip 0 --all --video          # -> viz/rgb/clip_0000.mp4
+$PY scripts/visualize.py output/NAME --image_dir rgb_cosmos --clip 0 --all --video   # -> viz/rgb_cosmos/clip_0000.mp4
+
+# single frames as PNG
+$PY scripts/visualize.py output/NAME --image_dir rgb_cosmos --clip 0 --frames 0 30 60
+```
+
+`run_pipeline.sh` makes the side-by-side videos of every clip automatically after the Cosmos import. With several
+looks per clip (`--looks`), the Cosmos images are in `rgb_cosmos_<look>/`; pass that folder as `--image_dir`.
 
 ## Quick start (step by step)
 
