@@ -89,7 +89,9 @@ scripts/run_pipeline.sh --cad cad_lego --name lego_480 --clips 1 --res 480 --uni
 - **SSH:** the Spark password is asked once per run (`ssh-copy-id h@100.123.185.58` removes the prompt).
   `SPARK` and `ISAACLAB_DIR` override the Spark address and the Isaac Lab checkout.
 - **Results:** `output/NAME/annotations/` (COCO for rendered, Cosmos and both), `output/NAME/viz/` (label preview
-  videos), `output/NAME_cosmos/results/` (raw Cosmos outputs).
+  videos), `output/NAME/viz/side_by_side_rgb_cosmos/<clip>.mp4` (render | Cosmos | labels, every clip),
+  `output/NAME_cosmos/results/` (raw Cosmos outputs). For an existing dataset:
+  `python scripts/visualize.py output/NAME --image_dir rgb_cosmos --all_clips --side_by_side`.
 
 ## Quick start (step by step)
 

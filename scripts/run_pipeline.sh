@@ -130,7 +130,9 @@ mkdir -p "$BATCH/results"
 rsync -a -e "$RSYNC_SSH" --include "${NAME}_cosmos__*/***" --exclude '*' "$SPARK:$REMOTE_OUTPUTS/" "$BATCH/results/"
 "$PY" "$ROOT/scripts/cosmos_import.py" "$DATASET" --batch "$BATCH" --results "$BATCH/results"
 for d in "$DATASET"/clips/clip_0000/rgb_cosmos*; do
-  [[ -d $d ]] && "$PY" "$ROOT/scripts/visualize.py" "$DATASET" --image_dir "$(basename "$d")" --clip 0 --all --video > /dev/null
+  [[ -d $d ]] || continue
+  "$PY" "$ROOT/scripts/visualize.py" "$DATASET" --image_dir "$(basename "$d")" --clip 0 --all --video > /dev/null
+  "$PY" "$ROOT/scripts/visualize.py" "$DATASET" --image_dir "$(basename "$d")" --all_clips --side_by_side
 done
 
 echo
@@ -139,3 +141,4 @@ echo "COCO files:       $DATASET/annotations/"
 echo "Cosmos report:    $DATASET/annotations/rgb_cosmos_report.json"
 echo "Cosmos videos:    $BATCH/results/<job>/vision.mp4"
 echo "label previews:   $DATASET/viz/"
+echo "side by side:     $DATASET/viz/side_by_side_rgb_cosmos/<clip>.mp4  (render | Cosmos | labels)"
