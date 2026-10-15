@@ -58,6 +58,11 @@ on the right. Every start uses the defaults;
   the camera observations, how many demos and the class names of the segmentation ids (see
   [Recorded robot demos](#recorded-robot-demos-isaac-lab--mimic-hdf5)). Step 1 then becomes **1 Import demos**, and
   **Preview frame** shows the first frame with its labels without starting Isaac Sim.
+- **Training data (demos):** the converter that turns HDF5 demos into training data (from the robot project, e.g.
+  the kuka GR00T/LeRobot converter), the Python to run it with, its arguments and the output folder; whether to
+  convert the Cosmos demos only (default: original and Cosmos demos), overwrite the output, and export demos where only
+  some cameras have Cosmos frames. Used by step **5 Convert for training**, which **Run all steps** includes once a
+  converter is chosen.
 - **Parts:** the CAD/STL folder (optional when the scene provides the parts), units, and whether a class is a file
   or a folder.
 - **Scene:** the built-in workcell, or a predesigned USD scene. After opening a scene, pick a **camera** from it
@@ -95,7 +100,8 @@ part size. **Run all steps** runs the whole pipeline; the **steps** can also run
 | 1 Generate (Isaac Sim) | renders the clips with all labels | dataset folder |
 | 2 Make Cosmos videos | turns each clip into Cosmos input videos (rgb, depth, segmentation), prompts and specs | Cosmos folder `inputs/`, `specs/` |
 | 3 Send to Cosmos | uploads the batch to the Spark and starts Cosmos there; returns right away | Cosmos runs on the Spark |
-| 4 Fetch results | waits until Cosmos is done, copies the results back and imports them | Cosmos folder `results/`, `rgb_cosmos/` and COCO in the dataset, side-by-side videos |
+| 4 Fetch results | waits until Cosmos is done, copies the results back and imports them | Cosmos folder `results/`, `rgb_cosmos/` and COCO in the dataset, side-by-side videos; for demos also the HDF5 with Cosmos images |
+| 5 Convert for training | (demos only) runs the converter on the original and Cosmos HDF5 files | training dataset folder, e.g. LeRobot for GR00T |
 
 A step uses what the previous ones left in the dataset and Cosmos folders, so steps can run at different times (for
 example send, close the GUI, and fetch the next day). **Stop** ends the local process; a Cosmos job already on the
@@ -150,6 +156,10 @@ scripts/run_pipeline.sh --cad assets/lego --name lego_480 --clips 1 --res 480 --
 | `--demos HDF5` | Use recorded robot demos instead of CAD parts (next section); `--cad` and the scene options are not used |
 | `--demo-cameras LIST`, `--max-demos N` | Camera observations to use (default `scene_cam,wrist_cam`), only the first N demos |
 | `--seg-names SPEC`, `--demos-out FILE` | Class names of the segmentation ids; the HDF5 with Cosmos images (default `DATASET/demos_cosmos.hdf5`) |
+| `--keep-missing` | Also export demos where only some cameras have Cosmos frames |
+| `--convert-script PY`, `--convert-python BIN` | Converter to training data (robot project) and its interpreter; adds the `convert` step |
+| `--convert-out DIR`, `--convert-args ARGS` | Training dataset folder (default `DATASET/training_data`); converter arguments (default `--input_files {inputs} --output_dir {output}`) |
+| `--cosmos-only`, `--convert-overwrite` | Convert only the Cosmos demos; replace an existing training dataset |
 
 - **Resuming:** re-running with the same `--name` keeps finished clips, finished Cosmos jobs and copied outputs. If
   the workstation or the connection drops while Cosmos runs, Cosmos keeps running on the Spark; run the same command
@@ -183,14 +193,29 @@ scripts/run_pipeline.sh --demos ../IsaacLab/datasets/kuka/binpick_generated.hdf5
   COCO); failed demos are skipped. The Cosmos video keeps the camera's aspect ratio (square cameras give square
   videos), and all cameras of one demo get the same look.
 - **fetch** also writes a copy of the HDF5 in which each camera's images are the Cosmos frames; states, actions and
-  attributes are unchanged, so it converts to LeRobot/GR00T like the original (convert both files together to train
-  on original and Cosmos demos). A demo is written only when all its cameras have Cosmos frames.
+  attributes are unchanged, so it converts to LeRobot/GR00T like the original. A demo is written only when all its
+  cameras have Cosmos frames. With several looks (`--looks`), every look gets its own file, `demos_cosmos_<look>.hdf5`.
+- **convert** (with `--convert-script`) runs the robot project's converter on the original HDF5 and every Cosmos HDF5,
+  so each Cosmos demo becomes an extra training episode with the same states and actions. WorldSynth only runs the
+  script; it needs no robot code. For the kuka GR00T setup:
 
-The two steps also run on their own:
+```bash
+scripts/run_pipeline.sh --demos ../IsaacLab/datasets/kuka/binpick_generated.hdf5 --name binpick_cosmos \
+  --max-demos 10 --seg-names "1=robot,2=table,3=ground,4-5=bin,10-15=soup_can" \
+  --convert-script ../kuka/scripts/gr00t/convert_to_gr00t_lerobot.py --convert-python ~/venvs/convert/bin/python \
+  --convert-out ../IsaacLab/datasets/kuka/binpick_lerobot_cosmos
+```
+
+  `{inputs}` in `--convert-args` becomes the HDF5 files and `{output}` the output folder; add converter options there,
+  e.g. `--convert-args "--input_files {inputs} --output_dir {output} --fps 20"`.
+
+The steps also run on their own:
 
 ```bash
 python scripts/demos.py import --hdf5 demos.hdf5 --cameras scene_cam wrist_cam --out output/demos --max_demos 10
 python scripts/demos.py export --dataset output/demos --out demos_cosmos.hdf5 [--keep_missing]
+python scripts/demos.py convert --hdf5 demos.hdf5 demos_cosmos.hdf5 --out lerobot_dataset \
+  --script ../kuka/scripts/gr00t/convert_to_gr00t_lerobot.py --python ~/venvs/convert/bin/python
 ```
 
 `--keep_missing` writes demos where only some cameras have Cosmos frames (e.g. only the scene camera was sent) and

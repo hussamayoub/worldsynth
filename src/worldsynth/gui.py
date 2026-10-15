@@ -30,15 +30,17 @@ import numpy as np
 import yaml
 
 from .config import load_config
+from .demos import CONVERT_ARGS
 
 ROOT = Path(__file__).resolve().parents[2]
 SETTINGS_FILE = Path(os.environ.get("WORLDSYNTH_GUI_SETTINGS", Path.home() / ".config" / "worldsynth" / "gui.json"))
 DEFAULT_CONFIG = ROOT / "configs" / "default.yaml"
 RUN_CONFIG = ROOT / "cache" / "gui_run_config.yaml"
+"""Merged configuration (base YAML + Configuration tab overrides) handed to each preview and run."""
 PROMPT_DIR = ROOT / "cache" / "gui_prompts"
 """Prompts (with the Prompts tab edits) handed to each run."""
 STAGES = ("generate", "prepare", "send", "fetch")
-"""Merged configuration (base YAML + Configuration tab overrides) handed to each preview and run."""
+"""Steps of every run; recorded demos can add ``convert`` (see :func:`run_all_stages`)."""
 ASKPASS = Path.home() / ".cache" / "worldsynth" / "askpass.sh"
 ALL_LOOKS = "all looks in configs/cosmos/prompts"
 RANDOM_CAMERA = "(random cameras around the parts)"
@@ -57,6 +59,18 @@ class GuiSettings:
     """Class names of the demos' segmentation ids, e.g. ``1=robot,10-15=soup_can``."""
     demos_out: str = ""
     """HDF5 with the Cosmos images; empty: ``<dataset folder>/demos_cosmos.hdf5``."""
+    keep_missing: bool = False
+    """Also export demos where only some cameras have Cosmos frames."""
+    convert_script: str = ""
+    """Converter from HDF5 demos to training data (robot project), e.g. ``convert_to_gr00t_lerobot.py``."""
+    convert_python: str = ""
+    """Interpreter with the converter's dependencies; empty: Isaac Lab's."""
+    convert_out: str = ""
+    """Training dataset folder; empty: ``<dataset folder>/training_data``."""
+    convert_args: str = CONVERT_ARGS
+    cosmos_only: bool = False
+    """Convert only the Cosmos demos, not the original ones too."""
+    convert_overwrite: bool = False
     cad_dir: str = ""
     units: str = "auto"
     class_from: str = "file"
@@ -235,6 +249,15 @@ def write_run_config(s: GuiSettings, path: Path = RUN_CONFIG) -> Path:
 def validate(s: GuiSettings, stages: tuple[str, ...] = STAGES, for_preview: bool = False) -> list[str]:
     """Problems that block running ``stages`` (or a preview), as messages for the user."""
     errors = []
+    if "convert" in stages and not for_preview:
+        if s.source != "demos":
+            errors.append("Convert for training is for recorded demos (Source: Recorded demos).")
+        elif not s.convert_script or not Path(s.convert_script).expanduser().is_file():
+            errors.append("Choose the converter script (Training data).")
+        if s.convert_python and not Path(s.convert_python).expanduser().is_file():
+            errors.append(f"Converter Python not found: {s.convert_python}")
+        if "{inputs}" not in s.convert_args.split():
+            errors.append("Converter arguments need an {inputs} word.")
     if s.source == "demos" and (for_preview or "generate" in stages):
         if not s.demos_hdf5 or not Path(s.demos_hdf5).is_file():
             errors.append("Choose the HDF5 file with the recorded demos.")
@@ -360,11 +383,25 @@ def pipeline_command(
             cmd += ["--seg-names", s.seg_names]
         if s.demos_out:
             cmd += ["--demos-out", s.demos_out]
+        if s.keep_missing:
+            cmd.append("--keep-missing")
+        if s.convert_script:
+            cmd += ["--convert-script", s.convert_script, "--convert-args", s.convert_args]
+            if s.convert_python:
+                cmd += ["--convert-python", s.convert_python]
+            if s.convert_out:
+                cmd += ["--convert-out", s.convert_out]
+            cmd += ["--cosmos-only"] * s.cosmos_only + ["--convert-overwrite"] * s.convert_overwrite
         return cmd
     cmd += scene_args(s)
     for item in common_overrides(s):
         cmd += ["--set", item]
     return cmd
+
+
+def run_all_stages(s: GuiSettings) -> tuple[str, ...]:
+    """Steps of "Run all steps": recorded demos with a converter also get converted for training."""
+    return STAGES + ("convert",) if s.source == "demos" and s.convert_script else STAGES
 
 
 def preview_command(s: GuiSettings, config: Path, out_dir: Path, isaaclab_python: str, root: Path = ROOT) -> list[str]:
@@ -529,8 +566,8 @@ def main():  # noqa: C901  (UI construction is long but flat)
                     command=lambda: update_source_state()).pack(side="left", padx=8)  # fmt: skip
     src_mode.grid(row=0, column=0, columnspan=3, sticky="w")
 
-    def browse_file(var, save=False):
-        kind = [("HDF5", "*.hdf5 *.h5"), ("All files", "*")]
+    def browse_file(var, save=False, kind=(("HDF5", "*.hdf5 *.h5"), ("All files", "*"))):
+        kind = list(kind)
         start_dir = str(Path(var.get()).parent) if var.get() else str(ROOT)
         f = (filedialog.asksaveasfilename(initialdir=start_dir, defaultextension=".hdf5", filetypes=kind) if save
              else filedialog.askopenfilename(initialdir=start_dir, filetypes=kind))  # fmt: skip
@@ -550,6 +587,29 @@ def main():  # noqa: C901  (UI construction is long but flat)
     hint(demo_frame, 5, "Max demos 0 = all. Seg classes name the ids of <camera>_seg, e.g. "
                         "1=robot,2=table,3=ground,4-5=bin,10-15=soup_can. Output HDF5: copy with the Cosmos images "
                         "(empty: <dataset folder>/demos_cosmos.hdf5)")  # fmt: skip
+
+    # training data: original + Cosmos demos through the robot project's converter (e.g. LeRobot for GR00T)
+    fr = section("Training data (demos)")
+    train_frame = fr
+    py_kind = (("Python", "*.py"), ("All files", "*"))
+    any_kind = (("All files", "*"),)
+    row(fr, 0, "Converter", ttk.Entry(fr, textvariable=v["convert_script"], width=30),
+        ttk.Button(fr, text="Browse...", command=lambda: browse_file(v["convert_script"], kind=py_kind)))  # fmt: skip
+    row(fr, 1, "Python", ttk.Entry(fr, textvariable=v["convert_python"], width=30),
+        ttk.Button(fr, text="Browse...", command=lambda: browse_file(v["convert_python"], kind=any_kind)))  # fmt: skip
+    row(fr, 2, "Arguments", ttk.Entry(fr, textvariable=v["convert_args"], width=30))
+    row(fr, 3, "Output folder", ttk.Entry(fr, textvariable=v["convert_out"], width=30),
+        ttk.Button(fr, text="Browse...", command=lambda: browse_dir(v["convert_out"])))  # fmt: skip
+    opts = ttk.Frame(fr)
+    ttk.Checkbutton(opts, text="Cosmos demos only", variable=v["cosmos_only"]).pack(side="left")
+    ttk.Checkbutton(opts, text="Overwrite output", variable=v["convert_overwrite"]).pack(side="left", padx=8)
+    ttk.Checkbutton(opts, text="Export partial demos", variable=v["keep_missing"]).pack(side="left")
+    opts.grid(row=4, column=1, columnspan=2, sticky="w")
+    hint(fr, 5, "Step 5 converts the original demos and the Cosmos demos (one HDF5 per look) with the robot "
+                "project's converter, e.g. kuka/scripts/gr00t/convert_to_gr00t_lerobot.py with "
+                "~/venvs/convert/bin/python for GR00T (LeRobot). {inputs} = the HDF5 files, {output} = the output "
+                "folder (empty: <dataset folder>/training_data). Python empty = Isaac Lab's. Export partial demos: "
+                "also write demos where only some cameras have Cosmos frames.")  # fmt: skip
 
     # parts
     fr = section("Parts (CAD / STL folder)")
@@ -629,6 +689,8 @@ def main():  # noqa: C901  (UI construction is long but flat)
     def update_source_state():
         demos_on = v["source"].get() == "demos"
         set_state(demo_frame, demos_on)
+        set_state(train_frame, demos_on)
+        step_btns[4].configure(state="normal" if demos_on else "disabled")
         for frame in (parts_frame, scene_frame, dataset_frame):
             set_state(frame, not demos_on)
         if not demos_on:
@@ -1174,7 +1236,7 @@ def main():  # noqa: C901  (UI construction is long but flat)
     btns = ttk.Frame(right)
     btns.pack(fill="x")
     preview_btn = ttk.Button(btns, text="Preview frame", command=lambda: run_preview())
-    run_btn = ttk.Button(btns, text="Run all steps", command=lambda: run_stages(STAGES))
+    run_btn = ttk.Button(btns, text="Run all steps", command=lambda: run_stages(run_all_stages(settings())))
     stop_btn = ttk.Button(btns, text="Stop", command=lambda: stop(), state="disabled")
     for b in (preview_btn, run_btn, stop_btn):
         b.pack(side="left", padx=(0, 6))
@@ -1185,7 +1247,8 @@ def main():  # noqa: C901  (UI construction is long but flat)
     ttk.Label(steps_row, text="Steps:").pack(side="left", padx=(0, 6))
     step_btns = []
     for label, stage in [("1 Generate (Isaac Sim)", "generate"), ("2 Make Cosmos videos", "prepare"),
-                         ("3 Send to Cosmos", "send"), ("4 Fetch results", "fetch")]:  # fmt: skip
+                         ("3 Send to Cosmos", "send"), ("4 Fetch results", "fetch"),
+                         ("5 Convert for training", "convert")]:  # fmt: skip
         b = ttk.Button(steps_row, text=label, command=lambda st=stage: run_stages((st,)))
         b.pack(side="left", padx=(0, 6))
         step_btns.append(b)
@@ -1247,6 +1310,8 @@ def main():  # noqa: C901  (UI construction is long but flat)
     def set_busy(busy: bool, what: str = ""):
         for b in [preview_btn, run_btn, *step_btns]:
             b.configure(state="disabled" if busy else "normal")
+        if not busy and v["source"].get() != "demos":
+            step_btns[4].configure(state="disabled")  # convert is for recorded demos only
         stop_btn.configure(state="normal" if busy else "disabled")
         status.configure(text=what if busy else "ready")
 
@@ -1362,11 +1427,15 @@ def main():  # noqa: C901  (UI construction is long but flat)
                 mid = frames[len(frames) // 2]
                 show_image(mid, clip / "labels" / f"{mid.stem}.json", f"{s.name}: {img_dir}/{mid.name} with labels")
             next_step = {"generate": "2 Make Cosmos videos", "prepare": "3 Send to Cosmos", "send": "4 Fetch results"}
+            if s.source == "demos":
+                next_step["fetch"] = "5 Convert for training"
             last = stages[-1]
+            if last == "convert":
+                write(f"training data: {Path(s.convert_out) if s.convert_out else data / 'training_data'}")
             write(f"done ({', '.join(stages)}). dataset: {data}  Cosmos folder: {batch}"
                   + (f"  next: {next_step[last]}" if last in next_step else ""))  # fmt: skip
 
-        what = "running all steps" if stages == STAGES else f"running step: {', '.join(stages)}"
+        what = "running all steps" if stages == run_all_stages(s) else f"running step: {', '.join(stages)}"
         cmd = pipeline_command(s, config, stages=stages, prompts=looks, negative=negative)
         start(cmd, ssh_env(s), f"{what} ({s.name})...", done)
 

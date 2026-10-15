@@ -9,11 +9,20 @@
     # 3. Cosmos frames -> a copy of the HDF5 with the camera images replaced (states and actions unchanged)
     python scripts/demos.py export --dataset output/kuka_demos --out datasets/kuka/binpick_cosmos.hdf5
 
+    # 4. original + Cosmos demos -> training data, with the robot project's converter (here LeRobot for GR00T)
+    python scripts/demos.py convert --hdf5 datasets/kuka/binpick_generated.hdf5 datasets/kuka/binpick_cosmos.hdf5 \
+        --out datasets/kuka/binpick_lerobot_cosmos --script ../kuka/scripts/gr00t/convert_to_gr00t_lerobot.py \
+        --python ~/venvs/convert/bin/python
+
 scripts/run_pipeline.sh --demos ... does all of this in one go.
 """
 
 import argparse
 import logging
+import shutil
+import subprocess
+import sys
+from pathlib import Path
 
 from worldsynth import demos
 
@@ -39,6 +48,13 @@ def main():
         action="store_true",
         help="Also write demos where only some cameras have Cosmos frames (the others keep the originals).",
     )
+    conv = sub.add_parser("convert", help="HDF5 demos -> training dataset, with a converter script")
+    conv.add_argument("--hdf5", nargs="+", required=True, help="Input HDF5 files (e.g. original and Cosmos demos).")
+    conv.add_argument("--out", required=True, help="Training dataset folder to write.")
+    conv.add_argument("--script", required=True, help="Converter script of the robot project.")
+    conv.add_argument("--python", default=None, help="Interpreter for the converter (default: this one).")
+    conv.add_argument("--args", default=demos.CONVERT_ARGS, help="Converter arguments; {inputs}, {output} are filled.")
+    conv.add_argument("--overwrite", action="store_true", help="Replace an existing dataset (one with meta/info.json).")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="[worldsynth] %(message)s")
 
@@ -48,9 +64,20 @@ def main():
             successful_only=not args.include_failed, overwrite=args.overwrite,
         )  # fmt: skip
         print(f"{len(meta['source']['demos'])} demos x {len(args.cameras)} cameras -> {args.out}")
-    else:
+    elif args.cmd == "export":
         written = demos.export_demos(args.dataset, args.out, args.image_dir, args.keep_missing)
         print(f"{len(written)} demos -> {args.out}")
+    else:
+        out = Path(args.out)
+        if out.exists() and args.overwrite:
+            if not (out / "meta" / "info.json").is_file():
+                sys.exit(f"{out} exists and is not a LeRobot dataset; not removed")
+            shutil.rmtree(out)
+        elif out.exists():
+            sys.exit(f"{out} exists; choose another folder or use --overwrite")
+        cmd = demos.convert_command(args.script, args.hdf5, out, args.python, args.args)
+        print("running:", " ".join(cmd), flush=True)
+        sys.exit(subprocess.call(cmd))
 
 
 if __name__ == "__main__":

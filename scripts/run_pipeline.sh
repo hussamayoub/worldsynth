@@ -35,12 +35,22 @@
 #   --demo-cameras L   image observations to use, comma separated (default scene_cam,wrist_cam)
 #   --max-demos N      only the first N demos
 #   --seg-names S      class names of segmentation ids, e.g. "1=robot,2=table,10-15=soup_can"
-#   --demos-out FILE   where the HDF5 with Cosmos images goes (default <dataset folder>/demos_cosmos.hdf5)
+#   --demos-out FILE   where the HDF5 with Cosmos images goes (default <dataset folder>/demos_cosmos.hdf5; with several
+#                      looks one file per look, FILE_<look>.hdf5)
+#   --keep-missing     also export demos where only some cameras have Cosmos frames (others keep the originals)
+#   --convert-script S converter from HDF5 demos to training data, from the robot project (e.g.
+#                      kuka/scripts/gr00t/convert_to_gr00t_lerobot.py); adds the convert step to the default steps
+#   --convert-python P interpreter with the converter's dependencies (default: Isaac Lab's)
+#   --convert-out DIR  training dataset folder (default <dataset folder>/training_data)
+#   --convert-args A   converter arguments (default "--input_files {inputs} --output_dir {output}")
+#   --cosmos-only      convert only the Cosmos demos (default: the original demos and the Cosmos demos)
+#   --convert-overwrite  replace an existing training dataset folder
 #   --stages LIST      which steps to run, comma separated (default generate,prepare,send,fetch):
 #                        generate  render the dataset in Isaac Sim
 #                        prepare   turn the clips into Cosmos input videos (rgb/depth/seg), prompts and specs
 #                        send      upload the batch to the Spark and start Cosmos there (does not wait)
 #                        fetch     wait until Cosmos is done, copy the results back and import them
+#                        convert   (demos) original + Cosmos HDF5 -> training data with --convert-script
 #   --skip-sim         same as --stages prepare,send,fetch
 #   --skip-cosmos      same as --stages generate
 #   --set KEY=VALUE    extra generate.py config override, repeatable (e.g. --set camera.distance=[0.4,0.7])
@@ -61,8 +71,9 @@ WS_SSH_CONTROL=${WS_SSH_CONTROL:-$HOME/.ssh/ws-%C}
 
 CAD="" NAME="" CLIPS=20 FRAMES=61 RES=256 STEPS=50 LOOKS=1 CLUTTER=true UNITS=auto CLASS_FROM=file
 EXTRA=() PROMPTS=() NEGATIVE=$ROOT/configs/cosmos/negative_prompt.json
-DEMOS="" DEMO_CAMERAS=scene_cam,wrist_cam MAX_DEMOS="" SEG_NAMES="" DEMOS_OUT=""
-STAGES=generate,prepare,send,fetch SCENE_ARGS=() SCENE_PARTS="" CONFIG=$ROOT/configs/default.yaml DATASET="" BATCH=""
+DEMOS="" DEMO_CAMERAS=scene_cam,wrist_cam MAX_DEMOS="" SEG_NAMES="" DEMOS_OUT="" KEEP_MISSING=""
+CONVERT_SCRIPT="" CONVERT_PY="" CONVERT_OUT="" CONVERT_ARGS="" COSMOS_ONLY=false CONVERT_OVERWRITE=""
+STAGES="" SCENE_ARGS=() SCENE_PARTS="" CONFIG=$ROOT/configs/default.yaml DATASET="" BATCH=""
 while [[ $# -gt 0 ]]; do
   case $1 in
     --cad) CAD=$(realpath "$2"); shift 2 ;;
@@ -92,6 +103,13 @@ while [[ $# -gt 0 ]]; do
     --max-demos) MAX_DEMOS=$2; shift 2 ;;
     --seg-names) SEG_NAMES=$2; shift 2 ;;
     --demos-out) DEMOS_OUT=$(realpath -m "$2"); shift 2 ;;
+    --keep-missing) KEEP_MISSING=--keep_missing; shift ;;
+    --convert-script) CONVERT_SCRIPT=$(realpath "$2"); shift 2 ;;
+    --convert-python) CONVERT_PY=$2; shift 2 ;;
+    --convert-out) CONVERT_OUT=$(realpath -m "$2"); shift 2 ;;
+    --convert-args) CONVERT_ARGS=$2; shift 2 ;;
+    --cosmos-only) COSMOS_ONLY=true; shift ;;
+    --convert-overwrite) CONVERT_OVERWRITE=--overwrite; shift ;;
     --stages) STAGES=$2; shift 2 ;;
     --skip-sim) STAGES=prepare,send,fetch; shift ;;
     --skip-cosmos) STAGES=generate; shift ;;
@@ -101,8 +119,10 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 [[ -n $NAME ]] || { echo "--name is required"; exit 1; }
+STAGES=${STAGES:-generate,prepare,send,fetch${CONVERT_SCRIPT:+,convert}}
 for st in ${STAGES//,/ }; do
-  [[ $st =~ ^(generate|prepare|send|fetch)$ ]] || { echo "unknown stage $st (generate, prepare, send, fetch)"; exit 1; }
+  [[ $st =~ ^(generate|prepare|send|fetch|convert)$ ]] \
+    || { echo "unknown stage $st (generate, prepare, send, fetch, convert)"; exit 1; }
 done
 want() { [[ ",$STAGES," == *",$1,"* ]]; }
 REMOTE_BASE=/home/${SPARK%%@*}/cosmos-work/worldsynth
@@ -122,6 +142,11 @@ SSH_OPTS="-o ControlMaster=auto -o ControlPath=$WS_SSH_CONTROL -o ControlPersist
 SSH=(ssh $SSH_OPTS "$SPARK")
 RSYNC_SSH="ssh $SSH_OPTS"
 step() { echo; echo "=== $(date +%T) $*"; }
+is_demos() {
+  [[ -n $DEMOS ]] || [[ -f $DATASET/dataset.json && \
+    $("$PY" -c "import json; print(json.load(open('$DATASET/dataset.json')).get('generator'))") == "worldsynth demos" ]]
+}
+DEMOS_OUT_FILE=${DEMOS_OUT:-$DATASET/demos_cosmos.hdf5}
 
 # 1. generate: import recorded demos, or render the dataset -------------------------------------------------------------
 if want generate && [[ -n $DEMOS ]]; then
@@ -210,9 +235,29 @@ if want fetch; then
   echo "Cosmos report:    $DATASET/annotations/rgb_cosmos_report.json"
   echo "Cosmos videos:    $BATCH/results/<job>/vision.mp4"
   echo "side by side:     $DATASET/viz/side_by_side_rgb_cosmos/<clip>.mp4  (render | Cosmos | labels)"
-  if [[ -n $DEMOS ]] || [[ $("$PY" -c "import json; print(json.load(open('$DATASET/dataset.json')).get('generator'))") == "worldsynth demos" ]]; then
-    OUT=${DEMOS_OUT:-$DATASET/demos_cosmos.hdf5}
-    "$PY" "$ROOT/scripts/demos.py" export --dataset "$DATASET" --out "$OUT"
-    echo "demos with Cosmos images: $OUT"
+  if is_demos; then
+    # one HDF5 per look; the list tells the convert step which files belong to this run
+    rm -f "$DATASET/exports.txt"
+    for image_dir in $(ls -d "$DATASET"/clips/*/rgb_cosmos* 2>/dev/null | xargs -rn1 basename | sort -u); do
+      OUT=$("$PY" -c "from worldsynth.demos import export_name; print(export_name('$DEMOS_OUT_FILE', '$image_dir'))")
+      "$PY" "$ROOT/scripts/demos.py" export --dataset "$DATASET" --out "$OUT" --image_dir "$image_dir" $KEEP_MISSING
+      echo "$OUT" >> "$DATASET/exports.txt"
+      echo "demos with Cosmos images ($image_dir): $OUT"
+    done
   fi
+fi
+
+# 5. convert: original + Cosmos demos -> training data (e.g. LeRobot for GR00T) ----------------------------------------
+if want convert; then
+  is_demos || { echo "the convert step is for recorded demos (--demos)"; exit 1; }
+  [[ -n $CONVERT_SCRIPT ]] || { echo "the convert step needs --convert-script"; exit 1; }
+  [[ -s $DATASET/exports.txt ]] || { echo "no Cosmos demos exported in $DATASET (run the fetch step first)"; exit 1; }
+  INPUTS=()
+  $COSMOS_ONLY || INPUTS+=("$("$PY" -c "import json; print(json.load(open('$DATASET/dataset.json'))['source']['hdf5'])")")
+  mapfile -t -O ${#INPUTS[@]} INPUTS < "$DATASET/exports.txt"
+  CONVERT_OUT=${CONVERT_OUT:-$DATASET/training_data}
+  step "convert: ${#INPUTS[@]} HDF5 file(s) -> $CONVERT_OUT"
+  "$PY" "$ROOT/scripts/demos.py" convert --hdf5 "${INPUTS[@]}" --out "$CONVERT_OUT" --script "$CONVERT_SCRIPT" \
+    ${CONVERT_PY:+--python "$CONVERT_PY"} ${CONVERT_ARGS:+--args "$CONVERT_ARGS"} $CONVERT_OVERWRITE
+  echo "training data: $CONVERT_OUT"
 fi

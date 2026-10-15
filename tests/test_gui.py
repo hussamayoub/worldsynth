@@ -160,3 +160,18 @@ def test_demos_source_command(tmp_path):
     assert f"--demos {h5} --demo-cameras scene_cam,wrist_cam --max-demos 5 --seg-names 10-15=can" in joined
     assert "--scene" not in cmd and not _sets(cmd)
     assert gui.validate(_settings(tmp_path, source="demos", demos_hdf5=str(tmp_path / "missing.hdf5")))
+    assert gui.run_all_stages(s) == gui.STAGES and "--convert-script" not in cmd
+    assert gui.validate(s, ("convert",))  # no converter chosen
+    conv = tmp_path / "conv.py"
+    conv.write_text("")
+    s.convert_script, s.convert_out, s.cosmos_only, s.keep_missing = str(conv), str(tmp_path / "lr"), True, True
+    assert gui.validate(s, ("convert",)) == [] and gui.run_all_stages(s)[-1] == "convert"
+    joined = " ".join(gui.pipeline_command(s, tmp_path / "c.yaml", tmp_path, stages=gui.run_all_stages(s)))
+    assert f"--convert-script {conv}" in joined and f"--convert-out {tmp_path / 'lr'}" in joined
+    assert (
+        "--cosmos-only" in joined
+        and "--keep-missing" in joined
+        and "--stages generate,prepare,send,fetch,convert" in joined
+    )
+    assert gui.validate(_settings(tmp_path, convert_script=str(conv)), ("convert",))  # CAD source
+    assert gui.validate(_settings(tmp_path, source="demos", convert_script=str(conv), convert_args="--x"), ("convert",))

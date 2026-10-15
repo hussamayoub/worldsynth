@@ -6,7 +6,8 @@ were recorded. Labels (masks, 2D boxes) come from the segmentation. The clips th
 
 ``export_demos`` writes a copy of the HDF5 file in which each camera's images are replaced by the Cosmos frames,
 with states, actions and everything else unchanged, ready for the same conversion to a training dataset (e.g. the
-LeRobot format for GR00T) as the original demos.
+LeRobot format for GR00T) as the original demos. ``convert_command`` builds the command line of such a converter,
+which belongs to the robot project (WorldSynth only runs it).
 
 Only ``h5py`` and the HDF5 layout of Isaac Lab's recorder (``data/<demo>/obs/...``) are assumed; nothing robot or
 task specific.
@@ -16,7 +17,9 @@ from __future__ import annotations
 
 import json
 import logging
+import shlex
 import shutil
+import sys
 from pathlib import Path
 
 import cv2
@@ -245,3 +248,38 @@ def export_demos(
     tmp.replace(out_hdf5)
     logger.info("wrote %d demos with %s images to %s", len(written), image_dir, out_hdf5)
     return written
+
+
+CONVERT_ARGS = "--input_files {inputs} --output_dir {output}"
+"""Default arguments of a training-data converter; ``{inputs}`` becomes the HDF5 files, ``{output}`` the folder."""
+
+
+def export_name(out_hdf5: str | Path, image_dir: str) -> Path:
+    """HDF5 file for the frames in ``image_dir``: ``out.hdf5`` for ``rgb_cosmos``, ``out_<look>.hdf5`` for
+    ``rgb_cosmos_<look>``."""
+    out_hdf5 = Path(out_hdf5)
+    look = image_dir.removeprefix("rgb_cosmos").lstrip("_")
+    return out_hdf5.with_name(f"{out_hdf5.stem}_{look}{out_hdf5.suffix}") if look else out_hdf5
+
+
+def convert_command(
+    script: str | Path,
+    inputs: list[str | Path],
+    output: str | Path,
+    python: str | None = None,
+    args: str = CONVERT_ARGS,
+) -> list[str]:
+    """Command line of a converter from Isaac Lab HDF5 demos to a training dataset (e.g. LeRobot for GR00T).
+
+    Args:
+        script: The converter script, e.g. ``kuka/scripts/gr00t/convert_to_gr00t_lerobot.py``.
+        python: Interpreter with the converter's dependencies; default: the current one.
+        args: Argument template; a ``{inputs}`` word expands to all input files, ``{output}`` to the output folder.
+    """
+    words = shlex.split(args)
+    if "{inputs}" not in words:
+        raise ValueError("the converter arguments need an {inputs} word")
+    cmd = [str(Path(python).expanduser()) if python else sys.executable, str(Path(script).expanduser())]
+    for word in words:
+        cmd += [str(p) for p in inputs] if word == "{inputs}" else [word.replace("{output}", str(output))]
+    return cmd

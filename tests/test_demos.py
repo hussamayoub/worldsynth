@@ -101,3 +101,31 @@ def test_import_without_cameras_fails(tmp_path):
     src = _hdf5(tmp_path / "demos.hdf5")
     with pytest.raises(RuntimeError, match="No demo"):
         demos.import_demos(src, tmp_path / "ds", ["front_cam"])
+
+
+def test_convert_runs_converter_with_inputs_and_output(tmp_path):
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    assert demos.export_name(tmp_path / "out.hdf5", "rgb_cosmos") == tmp_path / "out.hdf5"
+    assert demos.export_name(tmp_path / "out.hdf5", "rgb_cosmos_machine_shop") == tmp_path / "out_machine_shop.hdf5"
+    # stand-in converter: records its arguments as a LeRobot-like dataset
+    conv = tmp_path / "conv.py"
+    conv.write_text(
+        "import json, sys, pathlib\n"
+        "out = pathlib.Path(sys.argv[sys.argv.index('--output_dir') + 1])\n"
+        "(out / 'meta').mkdir(parents=True)\n"
+        "(out / 'meta' / 'info.json').write_text(json.dumps(sys.argv[1:]))\n"
+    )
+    script = Path(__file__).resolve().parents[1] / "scripts" / "demos.py"
+    out = tmp_path / "lerobot"
+    run = [sys.executable, str(script), "convert", "--hdf5", "a.hdf5", "b.hdf5", "--out", str(out),
+           "--script", str(conv), "--args", "--fps 15 --input_files {inputs} --output_dir {output}"]  # fmt: skip
+    assert subprocess.run(run, capture_output=True).returncode == 0
+    args = json.loads((out / "meta" / "info.json").read_text())
+    assert args == ["--fps", "15", "--input_files", "a.hdf5", "b.hdf5", "--output_dir", str(out)]
+    assert subprocess.run(run, capture_output=True).returncode != 0  # output exists
+    assert subprocess.run(run + ["--overwrite"], capture_output=True).returncode == 0
+    with pytest.raises(ValueError, match="inputs"):
+        demos.convert_command(conv, ["a.hdf5"], out, args="--output_dir {output}")
