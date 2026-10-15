@@ -36,9 +36,9 @@ cd ~/research/isaaclab/IsaacLab
 uv pip install --python .venv/bin/python --no-deps -e ../worldsynth
 ```
 
-Its dependencies (numpy, opencv, imageio-ffmpeg, pyyaml, trimesh, networkx, scipy) are already in that venv. Cosmos
-runs on the DGX Spark with the Cosmos3 Transfer setup of the kuka project (`~/cosmos-work/run_transfer.sh`, see the
-kuka README "Cosmos Transfer on the DGX Spark").
+Its dependencies (numpy, opencv, imageio-ffmpeg, pyyaml, trimesh, networkx, scipy, h5py) are already in that venv.
+Cosmos runs on the DGX Spark; set it up once as described in
+[Cosmos on the DGX Spark (setup)](#cosmos-on-the-dgx-spark-setup).
 
 ## GUI
 
@@ -334,6 +334,125 @@ $PY scripts/visualize.py output/NAME --image_dir rgb_cosmos --clip 0 --frames 0 
 `output/NAME/viz/` (`side_by_side_rgb_cosmos/<clip>.mp4`, `<image_dir>/<clip>.mp4`). The pipeline writes
 the side-by-side videos of every clip after the Cosmos import.
 
+## Cosmos on the DGX Spark (setup)
+
+The Cosmos Framework with `Cosmos3-Nano` is installed natively on the Spark (outside Docker), in `~/cosmos-work`.
+One-time steps, on the Spark:
+
+
+1. **Hugging Face licenses** (browser, with the account whose token is on the Spark): accept
+   [nvidia/Cosmos3-Nano](https://huggingface.co/nvidia/Cosmos3-Nano) and
+   [nvidia/Cosmos-Guardrail1](https://huggingface.co/nvidia/Cosmos-Guardrail1) (the safety models the runs download).
+   The token in `~/.cache/huggingface/token` works right after accepting; no new token is needed.
+2. **System packages** (on the Spark, needs `sudo`):
+
+   ```bash
+   sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg libx11-dev tree
+   ```
+
+3. **uv, repositories, and environment** (no `sudo`; the install takes a while and creates an ~9 GB environment):
+
+   ```bash
+   curl -LsSf https://astral.sh/uv/install.sh | sh && source $HOME/.local/bin/env
+   mkdir -p ~/cosmos-work && cd ~/cosmos-work
+   git clone https://github.com/NVIDIA/cosmos.git
+   cd cosmos && mkdir -p packages
+   git clone https://github.com/NVIDIA/cosmos-framework.git packages/cosmos3
+   cd packages/cosmos3
+   GIT_LFS_SKIP_SMUDGE=1 uv sync --all-extras --group=cu130-train
+   ```
+
+   Use the `cu130` group (the Spark has CUDA 13 only). The `-train` group is needed even for inference.
+
+4. **Hugging Face cache ownership** (only if the GR00T Docker container also runs on the Spark). It runs as root, so
+   the cache it created (`~/.cache/huggingface`) belongs to root and Cosmos (running as your user) cannot download into it
+   (`PermissionError: ... ~/.cache/huggingface/hub/...`). Give it back to your user, without `sudo`:
+
+   ```bash
+   docker run --rm -v $HOME/.cache/huggingface:/hf --entrypoint chown gr00t-spark -R 1000:1000 /hf
+   ```
+
+   GR00T keeps working (root can use the folder regardless of owner). Repeat this if GR00T later downloads a new model
+   and Cosmos fails with the same error.
+
+5. **Check:**
+
+   ```bash
+   cd ~/cosmos-work/cosmos/packages/cosmos3
+   source .venv/bin/activate && export LD_LIBRARY_PATH= PYTHONNOUSERSITE=1
+   python -c "import torch, cv2, natten; print(torch.__version__, torch.version.cuda, torch.cuda.is_available(), torch.cuda.get_device_name(0)); print(cv2.__version__, natten.HAS_LIBNATTEN)"
+   ```
+
+   Expect `2.10.0+cu130 13.0 True NVIDIA GB10` and `libnatten True`. PyTorch warns that the GB10 (compute capability
+   12.1) is newer than it was built for (up to 12.0); this is harmless, GPU kernels and NATTEN attention run correctly.
+
+6. **Runner.** `scripts/cosmos/run_transfer.sh` runs one spec with `Cosmos3-Nano` and a memory watchdog (stops the
+   run if less than 8 GB is free, `MIN_FREE_GIB`). The pipeline calls it as `~/cosmos-work/run_transfer.sh` on the
+   Spark; copy it there once, from the `worldsynth` folder:
+
+   ```bash
+   scp scripts/cosmos/run_transfer.sh h@100.123.185.58:~/cosmos-work/
+   ```
+
+#### Running Cosmos by hand
+
+The pipeline writes the specs itself. To try the cookbook samples or your own spec directly on the Spark:
+
+Specs live in `~/cosmos-work/cosmos/cookbooks/cosmos3/generator/transfer/specs/` (`depth`, `edge`, `blur`, `seg`,
+`wsm`, `multi_control`). The cookbook specs generate at 720p with 50 steps, which is very slow on the Spark. Make a
+low-resolution variant at the size the VLA sees (256 × 256, then downscale to 224 × 224) with fewer steps:
+
+```bash
+cd ~/cosmos-work/cosmos/cookbooks/cosmos3/generator/transfer/specs
+python3 -c "
+import json; s = json.load(open('multi_control.json'))
+s.update(name='transfer_multi_control_256', resolution='256', aspect_ratio='1,1', num_steps=20)
+json.dump(s, open('multi_control_256.json', 'w'), indent=2)"
+
+nohup ~/cosmos-work/run_transfer.sh multi_control_256 > /dev/null 2>&1 &
+tail -f ~/cosmos-work/run_multi_control_256.log     # progress; ends with "exit 0 after ... s"
+```
+
+Keep the spec in `specs/`: its `prompt_path` and `control_path` entries are relative to that folder. Supported sizes:
+`resolution` `256` (with `aspect_ratio` `1,1` → 256 × 256, `16,9` → 320 × 192), `480`, `720`, `768`.
+
+| Run on the Spark | Time | Lowest free memory |
+|---|---|---|
+| `multi_control` (edge + blur) at 256 × 256, 20 steps, 93 frames | 130 s in total (about 3.5 s per step, plus model loading) | 75 GB |
+| `depth` at 720p, 50 steps, 121 frames | about 175 s per step, about 2.4 h (stopped early) | 65 GB |
+
+The first run also downloads `Cosmos3-Nano` (about 35 GB) and the safety models (7 GB) into the Hugging Face cache.
+Do not run Cosmos and GR00T training at the same time: both need most of the 128 GB of unified memory.
+
+**Outputs** go to `transfer/outputs/Cosmos3-Nano/<spec name>/`: `vision.mp4` (the generated video), one
+`control_<type>.mp4` per control, and `sample_args.json`. A side-by-side video of the input, the controls, and the
+result (the input is in `inputs/vision.mp4`):
+
+```bash
+D=~/cosmos-work/cosmos/cookbooks/cosmos3/generator/transfer/outputs/Cosmos3-Nano/transfer_multi_control_256
+ffmpeg -y -i $D/inputs/vision.mp4 -i $D/control_edge.mp4 -i $D/control_blur.mp4 -i $D/vision.mp4 -filter_complex \
+"[0:v]fps=16,scale=256:256:force_original_aspect_ratio=increase,crop=256:256,setsar=1[a];[1:v]setsar=1[b];[2:v]setsar=1[c];[3:v]setsar=1[d];[a][b][c][d]hstack=inputs=4" \
+-c:v libx264 -crf 18 -pix_fmt yuv420p $D/side_by_side.mp4
+```
+
+Copy results to the workstation with `scp h@100.123.185.58:<path> .`.
+
+**Choosing controls.** Each control keeps different things from the input; its `weight` sets how strongly. `blur`
+keeps the original colors and lighting, so a high blur weight makes the output look like the input (little variety).
+`edge`, `depth`, and `seg` keep shapes and positions but leave appearance to the prompt, which is what visual
+augmentation needs; keep edges strong enough that the gripper and can outlines stay sharp. The output has as many
+frames as the control video (at 16 fps), so trim the control clip with `ffmpeg` for shorter, faster runs.
+
+**Your own videos.** Copy a spec and point it at your video: `vision_path` for a camera video (edge and blur controls
+are computed from it), or a `control_path` per control (e.g. a depth video rendered in Isaac Sim), and write a
+`prompt.json` like the ones in `transfer/assets/<spec>/`. Only `edge` and `blur` are computed from a camera video; `depth`, `seg`, and
+`wsm` need a rendered control video (`control_path`).
+
+Put a custom negative prompt into the spec's **`negative_prompt`** field as a JSON string. `negative_prompt_file` is
+ignored once the built-in defaults have set a negative prompt, and it is resolved relative to the working directory
+(not the spec), falling back silently to a built-in file of the same name. Check what a run used in
+`outputs/.../<name>/sample_args.json` (`negative_prompt`).
+
 ## Cosmos Transfer details
 
 - **Looks:** `configs/cosmos/prompts/*.json` are structured prompts (machine shop, electronics assembly, dim tending
@@ -370,9 +489,11 @@ scripts/generate.py            Isaac Sim stage (dataset only)
 scripts/cosmos_prepare.py      export a dataset as a Cosmos batch
 scripts/cosmos_import.py       import Cosmos results into a dataset
 scripts/visualize.py           label previews and side-by-side videos
+scripts/demos.py               recorded robot demos (HDF5) to a dataset, and Cosmos frames back to HDF5
+scripts/cosmos/run_transfer.sh Cosmos job runner, copied to ~/cosmos-work/ on the Spark
 scripts/make_example_scene.py  writes assets/scenes/example_cell.usda
 src/worldsynth/                cad (load/convert), scene + scene_info (USD), randomize, generate (render loop),
-                               writer + labels (outputs, COCO), cosmos, viz + videos (viewing), gui, config
+                               writer + labels (outputs, COCO), demos, cosmos, viz + videos (viewing), gui, config
 assets/lego/                   8 LEGO car pieces as USD (millimeters), the parts of the test runs
 assets/scenes/example_cell.usda  example scene (centimeters, y up): workbench, conveyor, machine, two cameras,
                                own parts under /Cell/Parts (one animated on the conveyor)

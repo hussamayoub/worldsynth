@@ -34,7 +34,7 @@ DEFAULT_SPEC = {
     "control_guidance": 1.5,
     "emphasize_control_in_prompt": False,
 }
-"""Spec fields from the Cosmos3 Transfer runs that worked on the DGX Spark (kuka/scripts/cosmos/specs)."""
+"""Spec fields from the Cosmos3 Transfer runs that worked on the DGX Spark."""
 
 DEFAULT_CONTROLS = {
     "edge": {"weight": 1.0, "preset_edge_threshold": "medium"},
@@ -298,7 +298,7 @@ def prepare(
 
 RUN_BATCH = """#!/bin/bash
 # Run every spec of this batch with Cosmos3 Transfer, skipping specs whose output already exists.
-# Uses run_transfer.sh from kuka/scripts/cosmos (Cosmos3-Nano with a memory watchdog).
+# Uses run_transfer.sh from worldsynth/scripts/cosmos (Cosmos3-Nano with a memory watchdog).
 # Usage on the Cosmos machine: {remote}/run_batch.sh [path/to/run_transfer.sh]
 set -u
 RUN=${{1:-$HOME/cosmos-work/run_transfer.sh}}

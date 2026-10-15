@@ -1378,7 +1378,7 @@ def main():  # noqa: C901  (UI construction is long but flat)
         remote = (
             "echo connected to $(hostname); "
             "test -x ~/cosmos-work/run_transfer.sh && echo 'Cosmos runner found (~/cosmos-work/run_transfer.sh)' "
-            "|| echo 'WARNING: ~/cosmos-work/run_transfer.sh is missing'; "
+            "|| echo 'WARNING: ~/cosmos-work/run_transfer.sh is missing (copy scripts/cosmos/run_transfer.sh there)'; "
             'free -g | awk \'/Mem:/{print "free memory: " $7 " GB"}\'; '
             "pgrep -f '[c]osmos_framework.scripts.inference' > /dev/null && echo 'a Cosmos job is running now' || true"
         )

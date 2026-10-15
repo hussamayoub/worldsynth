@@ -163,7 +163,7 @@ if want send; then
   [[ -f $BATCH/manifest.json ]] || { echo "no Cosmos batch in $BATCH (run the prepare step first)"; exit 1; }
   step "send: upload to $SPARK:$REMOTE_BATCH"
   "${SSH[@]}" "mkdir -p $REMOTE_BASE && test -x ~/cosmos-work/run_transfer.sh" \
-    || { echo "~/cosmos-work/run_transfer.sh missing on the Spark (copy kuka/scripts/cosmos/run_transfer.sh)"; exit 1; }
+    || { echo "~/cosmos-work/run_transfer.sh missing on the Spark (copy scripts/cosmos/run_transfer.sh there)"; exit 1; }
   rsync -a --exclude results -e "$RSYNC_SSH" "$BATCH/" "$SPARK:$REMOTE_BATCH/"
   if "${SSH[@]}" "pgrep -f '$REMOTE_BATCH/[r]un_batch.sh' > /dev/null"; then
     echo "this batch is already running on the Spark"
