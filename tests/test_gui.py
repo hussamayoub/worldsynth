@@ -173,5 +173,7 @@ def test_demos_source_command(tmp_path):
         and "--keep-missing" in joined
         and "--stages generate,prepare,send,fetch,convert" in joined
     )
+    assert gui.demos_export_path(s, tmp_path) == tmp_path / "output" / "run_x" / "demos_cosmos.hdf5"
+    assert gui.training_path(s, tmp_path) == tmp_path / "lr"
     assert gui.validate(_settings(tmp_path, convert_script=str(conv)), ("convert",))  # CAD source
     assert gui.validate(_settings(tmp_path, source="demos", convert_script=str(conv), convert_args="--x"), ("convert",))

@@ -138,6 +138,16 @@ def dataset_path(s: GuiSettings, root: Path = ROOT) -> Path:
     return Path(s.dataset_dir).expanduser() if s.dataset_dir else root / "output" / s.name
 
 
+def demos_export_path(s: GuiSettings, root: Path = ROOT) -> Path:
+    """HDF5 that step 4 writes for recorded demos: the demos with the Cosmos camera images."""
+    return Path(s.demos_out) if s.demos_out else dataset_path(s, root) / "demos_cosmos.hdf5"
+
+
+def training_path(s: GuiSettings, root: Path = ROOT) -> Path:
+    """Folder that step 5 writes: the converted training dataset (e.g. LeRobot)."""
+    return Path(s.convert_out) if s.convert_out else dataset_path(s, root) / "training_data"
+
+
 def cosmos_path(s: GuiSettings, root: Path = ROOT) -> Path:
     return Path(s.cosmos_dir).expanduser() if s.cosmos_dir else root / "output" / f"{s.name}_cosmos"
 
@@ -531,10 +541,13 @@ def main():  # noqa: C901  (UI construction is long but flat)
     for seq in ("<Button-4>", "<Button-5>", "<MouseWheel>"):
         pipe_outer.bind_all(seq, wheel, add="+")
 
+    sections: list = []
+
     def section(title):
         fr = ttk.LabelFrame(left, text=title, padding=6)
         fr.pack(fill="x", pady=4)
         fr.columnconfigure(1, weight=1)
+        sections.append(fr)
         return fr
 
     def row(fr, r, label, widget, extra=None):
@@ -577,39 +590,65 @@ def main():  # noqa: C901  (UI construction is long but flat)
     demo_frame = ttk.Frame(fr)
     demo_frame.grid(row=1, column=0, columnspan=3, sticky="ew")
     demo_frame.columnconfigure(1, weight=1)
-    row(demo_frame, 0, "Demos file", ttk.Entry(demo_frame, textvariable=v["demos_hdf5"], width=30),
+    row(demo_frame, 0, "Recorded demos", ttk.Entry(demo_frame, textvariable=v["demos_hdf5"], width=30),
         ttk.Button(demo_frame, text="Browse...", command=lambda: browse_file(v["demos_hdf5"])))  # fmt: skip
-    row(demo_frame, 1, "Cameras", ttk.Entry(demo_frame, textvariable=v["demo_cameras"], width=30))
-    row(demo_frame, 2, "Max demos", ttk.Spinbox(demo_frame, from_=0, to=100000, textvariable=v["max_demos"], width=8))
-    row(demo_frame, 3, "Seg classes", ttk.Entry(demo_frame, textvariable=v["seg_names"], width=30))
-    row(demo_frame, 4, "Output HDF5", ttk.Entry(demo_frame, textvariable=v["demos_out"], width=30),
-        ttk.Button(demo_frame, text="Browse...", command=lambda: browse_file(v["demos_out"], save=True)))  # fmt: skip
-    hint(demo_frame, 5, "Max demos 0 = all. Seg classes name the ids of <camera>_seg, e.g. "
-                        "1=robot,2=table,3=ground,4-5=bin,10-15=soup_can. Output HDF5: copy with the Cosmos images "
-                        "(empty: <dataset folder>/demos_cosmos.hdf5)")  # fmt: skip
+    hint(demo_frame, 1, "the Mimic or teleop HDF5 file; it is only read, never changed")
+    row(demo_frame, 2, "Cameras", ttk.Entry(demo_frame, textvariable=v["demo_cameras"], width=30))
+    row(demo_frame, 3, "Max demos", ttk.Spinbox(demo_frame, from_=0, to=100000, textvariable=v["max_demos"], width=8))
+    row(demo_frame, 4, "Seg classes", ttk.Entry(demo_frame, textvariable=v["seg_names"], width=30))
+    hint(demo_frame, 5, "Max demos 0 = all. Seg classes name the ids of <camera>_seg (for labels), e.g. "
+                        "1=robot,2=table,3=ground,4-5=bin,10-15=soup_can")  # fmt: skip
+    guide = (
+        "Steps (buttons on the right):\n"
+        "1 Import demos: copies the RGB, depth and segmentation of every demo and camera into the dataset folder.\n"
+        "2 Make Cosmos videos, 3 Send to Cosmos: builds the Cosmos jobs and starts them on the Spark.\n"
+        "4 Fetch results: copies the Cosmos videos back and writes the Cosmos demos HDF5: the same demos (actions, "
+        "states) with the camera images replaced.\n"
+        "5 Convert for training: recorded demos + Cosmos demos -> one merged training dataset (e.g. LeRobot for GR00T)."
+    )
+    ttk.Label(demo_frame, text=guide, foreground="#1a4d80", wraplength=470, justify="left").grid(
+        row=6, column=0, columnspan=3, sticky="w", pady=(6, 0)
+    )
 
-    # training data: original + Cosmos demos through the robot project's converter (e.g. LeRobot for GR00T)
-    fr = section("Training data (demos)")
+    # results of recorded demos: the Cosmos HDF5 (step 4) and the merged training dataset (step 5)
+    fr = section("Results (demos)")
     train_frame = fr
     py_kind = (("Python", "*.py"), ("All files", "*"))
     any_kind = (("All files", "*"),)
-    row(fr, 0, "Converter", ttk.Entry(fr, textvariable=v["convert_script"], width=30),
+    row(fr, 0, "Cosmos demos", ttk.Entry(fr, textvariable=v["demos_out"], width=30),
+        ttk.Button(fr, text="Browse...", command=lambda: browse_file(v["demos_out"], save=True)))  # fmt: skip
+    ttk.Checkbutton(fr, text="Also write demos with only some cameras done",
+                    variable=v["keep_missing"]).grid(row=1, column=1, columnspan=2, sticky="w")  # fmt: skip
+    ttk.Separator(fr).grid(row=2, column=0, columnspan=3, sticky="ew", pady=6)
+    row(fr, 3, "Converter", ttk.Entry(fr, textvariable=v["convert_script"], width=30),
         ttk.Button(fr, text="Browse...", command=lambda: browse_file(v["convert_script"], kind=py_kind)))  # fmt: skip
-    row(fr, 1, "Python", ttk.Entry(fr, textvariable=v["convert_python"], width=30),
+    row(fr, 4, "Converter Python", ttk.Entry(fr, textvariable=v["convert_python"], width=30),
         ttk.Button(fr, text="Browse...", command=lambda: browse_file(v["convert_python"], kind=any_kind)))  # fmt: skip
-    row(fr, 2, "Arguments", ttk.Entry(fr, textvariable=v["convert_args"], width=30))
-    row(fr, 3, "Output folder", ttk.Entry(fr, textvariable=v["convert_out"], width=30),
+    row(fr, 5, "Arguments", ttk.Entry(fr, textvariable=v["convert_args"], width=30))
+    row(fr, 6, "Training dataset", ttk.Entry(fr, textvariable=v["convert_out"], width=30),
         ttk.Button(fr, text="Browse...", command=lambda: browse_dir(v["convert_out"])))  # fmt: skip
     opts = ttk.Frame(fr)
-    ttk.Checkbutton(opts, text="Cosmos demos only", variable=v["cosmos_only"]).pack(side="left")
-    ttk.Checkbutton(opts, text="Overwrite output", variable=v["convert_overwrite"]).pack(side="left", padx=8)
-    ttk.Checkbutton(opts, text="Export partial demos", variable=v["keep_missing"]).pack(side="left")
-    opts.grid(row=4, column=1, columnspan=2, sticky="w")
-    hint(fr, 5, "Step 5 converts the original demos and the Cosmos demos (one HDF5 per look) with the robot "
-                "project's converter, e.g. kuka/scripts/gr00t/convert_to_gr00t_lerobot.py with "
-                "~/venvs/convert/bin/python for GR00T (LeRobot). {inputs} = the HDF5 files, {output} = the output "
-                "folder (empty: <dataset folder>/training_data). Python empty = Isaac Lab's. Export partial demos: "
-                "also write demos where only some cameras have Cosmos frames.")  # fmt: skip
+    ttk.Checkbutton(opts, text="Cosmos demos only (no recorded demos)", variable=v["cosmos_only"]).pack(side="left")
+    ttk.Checkbutton(opts, text="Overwrite", variable=v["convert_overwrite"]).pack(side="left", padx=8)
+    opts.grid(row=7, column=1, columnspan=2, sticky="w")
+    hint(fr, 8, "Converter: from the robot project, e.g. kuka/scripts/gr00t/convert_to_gr00t_lerobot.py with "
+                "~/venvs/convert/bin/python (LeRobot for GR00T); empty Python = Isaac Lab's. {inputs} = the HDF5 "
+                "files, {output} = the training dataset folder.")  # fmt: skip
+    result_paths = ttk.Label(fr, text="", foreground="#1a4d80", wraplength=470, justify="left")
+    result_paths.grid(row=9, column=0, columnspan=3, sticky="w", pady=(6, 0))
+
+    def update_result_paths(*_):
+        try:
+            s = settings()
+        except Exception:  # noqa: BLE001  (half-typed values)
+            return
+        result_paths.configure(
+            text=f"Step 4 writes: {demos_export_path(s)}\n"
+            + (f"Step 5 writes: {training_path(s)}" if s.convert_script else "Step 5: choose a converter first")
+        )
+
+    for key in ("name", "dataset_dir", "demos_out", "convert_out", "convert_script"):
+        v[key].trace_add("write", update_result_paths)
 
     # parts
     fr = section("Parts (CAD / STL folder)")
@@ -688,13 +727,19 @@ def main():  # noqa: C901  (UI construction is long but flat)
 
     def update_source_state():
         demos_on = v["source"].get() == "demos"
-        set_state(demo_frame, demos_on)
-        set_state(train_frame, demos_on)
-        step_btns[4].configure(state="normal" if demos_on else "disabled")
-        for frame in (parts_frame, scene_frame, dataset_frame):
-            set_state(frame, not demos_on)
-        if not demos_on:
+        hidden = {parts_frame, scene_frame, dataset_frame} if demos_on else {train_frame}
+        for frame in sections:  # re-pack in order so the visible sections keep their places
+            frame.pack_forget()
+        for frame in sections:
+            if frame not in hidden:
+                frame.pack(fill="x", pady=4)
+        if demos_on:
+            demo_frame.grid()
+            update_result_paths()
+        else:
+            demo_frame.grid_remove()
             update_scene_state()
+        step_btns[4].configure(state="normal" if demos_on else "disabled")
         step_btns[0].configure(text="1 Import demos" if demos_on else "1 Generate (Isaac Sim)")
 
     def load_scene():
@@ -742,7 +787,7 @@ def main():  # noqa: C901  (UI construction is long but flat)
     row(fr, 0, "Run name", ttk.Entry(fr, textvariable=v["name"], width=24))
     row(fr, 1, "Dataset folder", ttk.Entry(fr, textvariable=v["dataset_dir"], width=30),
         ttk.Button(fr, text="Browse...", command=lambda: browse_dir(v["dataset_dir"])))  # fmt: skip
-    hint(fr, 2, "Isaac Sim output; empty: output/<run name>")
+    hint(fr, 2, "Isaac Sim output or imported demos; empty: output/<run name>")
     row(fr, 3, "Cosmos folder", ttk.Entry(fr, textvariable=v["cosmos_dir"], width=30),
         ttk.Button(fr, text="Browse...", command=lambda: browse_dir(v["cosmos_dir"])))  # fmt: skip
     hint(

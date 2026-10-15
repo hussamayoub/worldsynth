@@ -58,11 +58,12 @@ on the right. Every start uses the defaults;
   the camera observations, how many demos and the class names of the segmentation ids (see
   [Recorded robot demos](#recorded-robot-demos-isaac-lab--mimic-hdf5)). Step 1 then becomes **1 Import demos**, and
   **Preview frame** shows the first frame with its labels without starting Isaac Sim.
-- **Training data (demos):** the converter that turns HDF5 demos into training data (from the robot project, e.g.
-  the kuka GR00T/LeRobot converter), the Python to run it with, its arguments and the output folder; whether to
-  convert the Cosmos demos only (default: original and Cosmos demos), overwrite the output, and export demos where only
-  some cameras have Cosmos frames. Used by step **5 Convert for training**, which **Run all steps** includes once a
-  converter is chosen.
+- **Results (demos):** where step 4 writes the **Cosmos demos** HDF5 (the recorded demos with the Cosmos camera
+  images), and the converter of step **5 Convert for training**, which merges the recorded and the Cosmos demos into
+  one training dataset (from the robot project, e.g. the kuka GR00T/LeRobot converter, with the Python to run it, its
+  arguments and the **training dataset** folder). The section shows the files both steps will write. **Run all
+  steps** includes step 5 once a converter is chosen. In demos mode the CAD sections (Parts, Scene, Dataset) are
+  hidden, and the Source section lists what each step does.
 - **Parts:** the CAD/STL folder (optional when the scene provides the parts), units, and whether a class is a file
   or a folder.
 - **Scene:** the built-in workcell, or a predesigned USD scene. After opening a scene, pick a **camera** from it
