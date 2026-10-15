@@ -2,8 +2,8 @@
 Cosmos settings, the output folders and the Spark login; adjust any config value on the Configuration tab (load a
 YAML, override values); then preview a frame or run the whole pipeline (``scripts/run_pipeline.sh``).
 
-Start it with the Isaac Lab Python (it needs ``pxr`` to read scenes): ``scripts/gui.sh`` (``--preview`` renders a
-preview of the saved setup right after start).
+Start it with the Isaac Lab Python (it needs ``pxr`` to read scenes): ``scripts/gui.sh``. It starts with the default
+settings; ``--restore`` loads the settings of the last run (``--preview`` then renders a preview right away).
 
 The SSH password is only handed to ``ssh`` through the environment of the pipeline process (via ``SSH_ASKPASS``).
 It is never written to disk and not saved with the other settings.
@@ -34,6 +34,9 @@ ROOT = Path(__file__).resolve().parents[2]
 SETTINGS_FILE = Path(os.environ.get("WORLDSYNTH_GUI_SETTINGS", Path.home() / ".config" / "worldsynth" / "gui.json"))
 DEFAULT_CONFIG = ROOT / "configs" / "default.yaml"
 RUN_CONFIG = ROOT / "cache" / "gui_run_config.yaml"
+PROMPT_DIR = ROOT / "cache" / "gui_prompts"
+"""Prompts (with the Prompts tab edits) handed to each run."""
+STAGES = ("generate", "prepare", "send", "fetch")
 """Merged configuration (base YAML + Configuration tab overrides) handed to each preview and run."""
 ASKPASS = Path.home() / ".cache" / "worldsynth" / "askpass.sh"
 ALL_LOOKS = "all looks in configs/cosmos/prompts"
@@ -76,7 +79,6 @@ class GuiSettings:
     looks: int = 1
     prompt: str = ALL_LOOKS
     negative: str = "configs/cosmos/negative_prompt.json"
-    render_only: bool = False
     config_file: str = ""
     """Base YAML config; empty: ``configs/default.yaml``."""
     config_overrides: dict[str, str] = field(default_factory=dict)
@@ -219,24 +221,25 @@ def write_run_config(s: GuiSettings, path: Path = RUN_CONFIG) -> Path:
 # --- commands --------------------------------------------------------------------------------------------------------
 
 
-def validate(s: GuiSettings, for_preview: bool = False) -> list[str]:
-    """Problems that block a run, as messages for the user."""
+def validate(s: GuiSettings, stages: tuple[str, ...] = STAGES, for_preview: bool = False) -> list[str]:
+    """Problems that block running ``stages`` (or a preview), as messages for the user."""
     errors = []
-    scene_parts = s.use_scene and s.scene_parts
-    if s.cad_dir and not Path(s.cad_dir).is_dir():
-        errors.append(f"CAD folder not found: {s.cad_dir}")
-    elif not s.cad_dir and not scene_parts:
-        errors.append("Choose the folder with the CAD/STL files (or parts in the USD scene).")
-    if s.use_scene:
-        if not s.scene_usd or not Path(s.scene_usd).is_file():
-            errors.append("Choose the USD scene file.")
-        if not s.scene_surface:
-            errors.append("Choose the surface in the scene to place the parts on.")
+    if for_preview or "generate" in stages:
+        scene_parts = s.use_scene and s.scene_parts
+        if s.cad_dir and not Path(s.cad_dir).is_dir():
+            errors.append(f"CAD folder not found: {s.cad_dir}")
+        elif not s.cad_dir and not scene_parts:
+            errors.append("Choose the folder with the CAD/STL files (or parts in the USD scene).")
+        if s.use_scene:
+            if not s.scene_usd or not Path(s.scene_usd).is_file():
+                errors.append("Choose the USD scene file.")
+            if not s.scene_surface:
+                errors.append("Choose the surface in the scene to place the parts on.")
     if not for_preview:
         if not re.fullmatch(r"[A-Za-z0-9_.-]+", s.name or ""):
             errors.append("Run name: letters, digits, '_', '-' and '.' only.")
-        if not s.render_only and not (s.spark_host and s.spark_user):
-            errors.append("Enter the Spark host and user (or tick 'Render only').")
+        if ("send" in stages or "fetch" in stages) and not (s.spark_host and s.spark_user):
+            errors.append("Enter the Spark host and user.")
     if s.parts_min > s.parts_max or s.clutter_min > s.clutter_max:
         errors.append("A minimum is larger than its maximum.")
     if s.config_file and not Path(s.config_file).is_file():
@@ -269,21 +272,70 @@ def scene_args(s: GuiSettings) -> list[str]:
     return args
 
 
-def pipeline_command(s: GuiSettings, config: Path, root: Path = ROOT) -> list[str]:
-    """Command line of ``run_pipeline.sh`` for these settings (without secrets)."""
+def look_files(s: GuiSettings, root: Path = ROOT) -> list[Path]:
+    """Look prompt files a run uses: the chosen one, or all in ``configs/cosmos/prompts``."""
+    if s.prompt == ALL_LOOKS:
+        return sorted((root / "configs" / "cosmos" / "prompts").glob("*.json"))
+    return [root / s.prompt]
+
+
+def write_prompts(
+    s: GuiSettings, edits: dict[str, str], out_dir: Path = PROMPT_DIR, root: Path = ROOT
+) -> tuple[list[Path], Path]:
+    """Write the look prompts and the negative prompt of a run, with the Prompts tab edits, to ``out_dir``.
+
+    Args:
+        edits: Prompt file (relative to the repo) -> edited JSON text. Files without edits are copied as they are.
+
+    Returns:
+        The look prompt files and the negative prompt file to pass to the pipeline. Raises ``ValueError`` if an
+        edited prompt is not valid JSON.
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for old in out_dir.glob("*.json"):
+        old.unlink()
+
+    def materialize(path: Path, name: str) -> Path:
+        rel = str(path.relative_to(root)) if path.is_relative_to(root) else str(path)
+        text = edits.get(rel, path.read_text())
+        try:
+            json.loads(text)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"{rel} is not valid JSON: {e}") from e
+        out = out_dir / name
+        out.write_text(text)
+        return out
+
+    looks = [materialize(p, p.name) for p in look_files(s, root)]
+    negative = materialize(root / s.negative, "negative_prompt.json")
+    return looks, negative
+
+
+def pipeline_command(
+    s: GuiSettings,
+    config: Path,
+    root: Path = ROOT,
+    stages: tuple[str, ...] = STAGES,
+    prompts: list[Path] | None = None,
+    negative: Path | None = None,
+) -> list[str]:
+    """Command line of ``run_pipeline.sh`` for these settings (without secrets).
+
+    Args:
+        prompts, negative: Prompt files to use (e.g. from :func:`write_prompts`); default: the chosen files.
+    """
     cmd = [str(root / "scripts" / "run_pipeline.sh"), "--name", s.name, "--config", str(config)]
+    cmd += ["--stages", ",".join(stages)]
     if s.cad_dir:
         cmd += ["--cad", s.cad_dir]
     cmd += ["--dataset-dir", str(dataset_path(s, root)), "--cosmos-dir", str(cosmos_path(s, root))]
     cmd += ["--clips", str(s.clips), "--frames", str(s.frames), "--res", s.resolution, "--steps", str(s.steps)]
     cmd += ["--looks", str(s.looks), "--units", s.units, "--class-from", s.class_from]
-    cmd += ["--spark", f"{s.spark_user}@{s.spark_host}", "--negative", str(root / s.negative)]
-    if s.prompt != ALL_LOOKS:
-        cmd += ["--prompts", str(root / s.prompt)]
+    cmd += ["--spark", f"{s.spark_user}@{s.spark_host}", "--negative", str(negative or root / s.negative)]
+    for p in prompts if prompts is not None else ([] if s.prompt == ALL_LOOKS else [root / s.prompt]):
+        cmd += ["--prompts", str(p)]
     if not s.clutter:
         cmd.append("--no-clutter")
-    if s.render_only:
-        cmd.append("--skip-cosmos")
     cmd += scene_args(s)
     for item in common_overrides(s):
         cmd += ["--set", item]
@@ -329,7 +381,6 @@ def main():  # noqa: C901  (UI construction is long but flat)
 
     from . import scene_info
 
-    s0 = load_settings()
     app = tk.Tk()
     app.title("WorldSynth")
     app.geometry("1500x940")
@@ -337,12 +388,14 @@ def main():  # noqa: C901  (UI construction is long but flat)
     if "clam" in style.theme_names():
         style.theme_use("clam")
 
+    # every start uses the defaults; "Restore last session" brings back the settings of the last run
+    defaults = GuiSettings()
     v: dict[str, tk.Variable] = {}
     for f in dataclasses.fields(GuiSettings):
-        val = getattr(s0, f.name)
+        val = getattr(defaults, f.name)
         if isinstance(val, dict):
             continue
-        var = (
+        v[f.name] = (
             tk.BooleanVar(value=val)
             if isinstance(val, bool)
             else tk.IntVar(value=val)
@@ -351,14 +404,16 @@ def main():  # noqa: C901  (UI construction is long but flat)
             if isinstance(val, float)
             else tk.StringVar(value=val)
         )
-        v[f.name] = var
 
     state = {
         "proc": None,
         "queue": queue.Queue(),
         "after_run": None,
-        "overrides": dict(s0.config_overrides),
+        "overrides": {},
         "comments": config_comments(),
+        "select": defaults,  # camera/surface/parts to select once a scene is read
+        "prompt_edits": {},  # prompt file (relative) -> edited text
+        "prompt_shown": {},  # text box -> file it shows
     }
 
     def settings() -> GuiSettings:
@@ -376,6 +431,17 @@ def main():  # noqa: C901  (UI construction is long but flat)
         parts = data["scene_parts"]
         data["scene_parts"] = "" if parts == NO_SCENE_PARTS else parts.split("   ")[0]
         return GuiSettings(**data)
+
+    def apply_settings(s: GuiSettings):
+        for f in dataclasses.fields(GuiSettings):
+            if f.name in v and f.name != "password":  # a typed password stays
+                v[f.name].set(getattr(s, f.name))
+        state["overrides"] = dict(s.config_overrides)
+        state["select"] = s
+        update_scene_state()
+        if s.use_scene and s.scene_usd:
+            load_scene()
+        refresh_config()
 
     # --- layout: tabs on the left, buttons + preview + log on the right -----------------------------------------------
     notebook = ttk.Notebook(app, width=560)
@@ -423,6 +489,12 @@ def main():  # noqa: C901  (UI construction is long but flat)
     def hint(fr, r, text):
         ttk.Label(fr, text=text, foreground="#555", wraplength=400).grid(row=r, column=1, columnspan=2, sticky="w")
 
+    session = ttk.Frame(left)
+    session.pack(fill="x", pady=(0, 2))
+    ttk.Button(session, text="Restore last session", command=lambda: restore_session()).pack(side="left")
+    ttk.Button(session, text="Defaults", command=lambda: apply_settings(GuiSettings())).pack(side="left", padx=6)
+    ttk.Label(session, text="(starts with defaults)", foreground="#555").pack(side="left")
+
     # parts
     fr = section("Parts (CAD / STL folder)")
     row(fr, 0, "Folder", ttk.Entry(fr, textvariable=v["cad_dir"], width=30),
@@ -450,6 +522,7 @@ def main():  # noqa: C901  (UI construction is long but flat)
         )
         if f:
             v["scene_usd"].set(f)
+            state["select"] = GuiSettings()
             load_scene()
 
     scene_btn = ttk.Button(fr, text="Open...", command=browse_scene)
@@ -488,7 +561,7 @@ def main():  # noqa: C901  (UI construction is long but flat)
             with contextlib.suppress(tk.TclError):
                 w.configure(state=("readonly" if isinstance(w, ttk.Combobox) else "normal") if on else "disabled")
 
-    def load_scene(select_saved: bool = False):
+    def load_scene():
         path = v["scene_usd"].get()
         if not path or not Path(path).is_file():
             return
@@ -496,14 +569,14 @@ def main():  # noqa: C901  (UI construction is long but flat)
 
         def work():
             try:
-                info = scene_info.inspect(path)
-                state["queue"].put(("scene", info, select_saved))
+                state["queue"].put(("scene", scene_info.inspect(path), None))
             except Exception as e:  # noqa: BLE001  (shown to the user)
                 state["queue"].put(("scene_error", str(e), None))
 
         threading.Thread(target=work, daemon=True).start()
 
-    def show_scene(info, select_saved):
+    def show_scene(info):
+        sel = state["select"]
         cams = [RANDOM_CAMERA] + [f"{c.path}   (at {c.position}, f={c.focal_length:g})" for c in info.cameras]
         surfs = [f"{s.path}   (top {s.top_z:.3f} m, {s.size[0]:.2f} × {s.size[1]:.2f} m)" for s in info.surfaces]
         groups = [NO_SCENE_PARTS] + [
@@ -513,14 +586,16 @@ def main():  # noqa: C901  (UI construction is long but flat)
         camera_box.configure(values=cams)
         surface_box.configure(values=surfs)
         parts_box.configure(values=groups)
-        saved_parts = s0.scene_parts if select_saved else ""
-        v["scene_parts"].set(next((g for g in groups if saved_parts and g.split("   ")[0] == saved_parts), groups[0]))
-        saved_cam, saved_surf = s0.scene_camera if select_saved else "", s0.scene_surface if select_saved else ""
-        match_cam = next((c for c in cams if saved_cam and c.split("   ")[0] == saved_cam), None)
-        v["scene_camera"].set(match_cam or (cams[1] if len(cams) > 1 else cams[0]))
-        match_surf = next((s for s in surfs if saved_surf and s.split("   ")[0] == saved_surf), None)
-        # default surface: the largest one that is not the floor-sized first entry, if there is a choice
-        v["scene_surface"].set(match_surf or (surfs[1] if len(surfs) > 1 else surfs[0] if surfs else ""))
+
+        def pick(options, saved, fallback):
+            return next((o for o in options if saved and o.split("   ")[0] == saved), fallback)
+
+        v["scene_camera"].set(pick(cams, sel.scene_camera, cams[1] if len(cams) > 1 else cams[0]))
+        # default surface: the second largest (the largest is usually the floor)
+        v["scene_surface"].set(
+            pick(surfs, sel.scene_surface, surfs[1] if len(surfs) > 1 else surfs[0] if surfs else "")
+        )
+        v["scene_parts"].set(pick(groups, sel.scene_parts, groups[0]))
         scene_info_label.configure(
             text=f"{len(info.cameras)} cameras, {len(info.surfaces)} surfaces; file units "
             f"{info.meters_per_unit:g} m, {info.up_axis}-up (converted to m, z-up)"
@@ -534,7 +609,9 @@ def main():  # noqa: C901  (UI construction is long but flat)
     hint(fr, 2, "Isaac Sim output; empty: output/<run name>")
     row(fr, 3, "Cosmos folder", ttk.Entry(fr, textvariable=v["cosmos_dir"], width=30),
         ttk.Button(fr, text="Browse...", command=lambda: browse_dir(v["cosmos_dir"])))  # fmt: skip
-    hint(fr, 4, "batch sent to the Spark; results copied back to <folder>/results; empty: output/<run name>_cosmos")
+    hint(
+        fr, 4, "Cosmos input videos and batch; results copied back to <folder>/results; empty: output/<run name>_cosmos"
+    )
 
     # dataset
     fr = section("Dataset")
@@ -559,11 +636,8 @@ def main():  # noqa: C901  (UI construction is long but flat)
 
     # cosmos
     fr = section("Cosmos Transfer")
-    looks = [ALL_LOOKS] + [
-        str(p.relative_to(ROOT))
-        for p in sorted((ROOT / "configs" / "cosmos").rglob("*.json"))
-        if "negative" not in p.name
-    ]
+    look_options = [str(p.relative_to(ROOT)) for p in sorted((ROOT / "configs" / "cosmos").rglob("*.json"))
+                    if "negative" not in p.name]  # fmt: skip
     negatives = [str(p.relative_to(ROOT)) for p in sorted((ROOT / "configs" / "cosmos").rglob("negative*.json"))]
     res = ttk.Frame(fr)
     ttk.Radiobutton(res, text="256 (fast, ~3 min/clip)", variable=v["resolution"], value="256").pack(side="left")
@@ -575,9 +649,10 @@ def main():  # noqa: C901  (UI construction is long but flat)
     ttk.Spinbox(sl, from_=1, to=10, textvariable=v["looks"], width=4).pack(side="left")
     ttk.Label(sl, text=" looks per clip").pack(side="left")
     row(fr, 1, "Sampling", sl)
-    row(fr, 2, "Look prompt", ttk.Combobox(fr, textvariable=v["prompt"], values=looks, state="readonly", width=30))
+    row(fr, 2, "Looks used", ttk.Combobox(fr, textvariable=v["prompt"], values=[ALL_LOOKS] + look_options,
+                                          state="readonly", width=30))  # fmt: skip
     row(fr, 3, "Negative", ttk.Combobox(fr, textvariable=v["negative"], values=negatives, state="readonly", width=30))
-    ttk.Checkbutton(fr, text="Render only (skip Cosmos)", variable=v["render_only"]).grid(row=4, column=1, sticky="w")
+    hint(fr, 4, "edit the prompt texts on the Prompts tab")
 
     # spark
     fr = section("Spark (runs Cosmos)")
@@ -597,7 +672,13 @@ def main():  # noqa: C901  (UI construction is long but flat)
     base_label.pack(side="left", padx=6)
     cfg_btns = ttk.Frame(cfg_tab)
     cfg_btns.pack(fill="x", pady=(4, 4))
-    tree = ttk.Treeview(cfg_tab, columns=("value", "source"), height=24)
+    tree_box = ttk.Frame(cfg_tab)
+    tree_box.pack(fill="both", expand=True)
+    tree = ttk.Treeview(tree_box, columns=("value", "source"), height=24)
+    tree_scroll = ttk.Scrollbar(tree_box, orient="vertical", command=tree.yview)
+    tree.configure(yscrollcommand=tree_scroll.set)
+    tree.pack(side="left", fill="both", expand=True)
+    tree_scroll.pack(side="right", fill="y")
     tree.heading("#0", text="Setting")
     tree.heading("value", text="Value (double-click to edit)")
     tree.heading("source", text="From")
@@ -607,13 +688,8 @@ def main():  # noqa: C901  (UI construction is long but flat)
     tree.tag_configure("override", foreground="#0b5cad", font=("TkDefaultFont", 9, "bold"))
     tree.tag_configure("file", foreground="#1b7a1b")
     tree.tag_configure("pipeline", foreground="#888")
-    tree_box = ttk.Frame(cfg_tab)
-    tree_box.pack(fill="both", expand=True)
-    tree_scroll = ttk.Scrollbar(cfg_tab, orient="vertical", command=tree.yview)
-    tree.configure(yscrollcommand=tree_scroll.set)
-    tree.pack(in_=tree_box, side="left", fill="both", expand=True)
-    tree_scroll.pack(in_=tree_box, side="right", fill="y")
-    desc = ttk.Label(cfg_tab, text="", foreground="#444", wraplength=520, justify="left")
+    desc = ttk.Label(cfg_tab, text="Select a setting to see what it does.", foreground="#444", wraplength=520,
+                     justify="left")  # fmt: skip
     desc.pack(fill="x", pady=(4, 0))
     legend = ("blue: changed here   green: from the loaded YAML   grey: set on the Pipeline tab (it wins)   "
               "black: default")  # fmt: skip
@@ -624,34 +700,41 @@ def main():  # noqa: C901  (UI construction is long but flat)
         base = base_config_path(s)
         base_label.configure(text=str(base.relative_to(ROOT)) if base.is_relative_to(ROOT) else str(base))
         try:
-            defaults = config_values(None)
+            defaults_flat = config_values(None)
             from_file = config_values(base)
             current = config_values(base, state["overrides"])
         except Exception as e:  # noqa: BLE001  (shown to the user)
             messagebox.showerror("WorldSynth", f"Configuration error: {e}")
             return
         locked = pipeline_keys(s)
-        open_items = {i for i in tree.get_children("") if tree.item(i, "open")} or None
+
+        def nodes(parent=""):
+            for i in tree.get_children(parent):
+                yield i
+                yield from nodes(i)
+
+        all_nodes = [i for i in nodes() if tree.get_children(i)]
+        open_items = {i for i in all_nodes if tree.item(i, "open")} if all_nodes else None
         selected = tree.selection()
         tree.delete(*tree.get_children(""))
         for key, value in current.items():
             parent = ""
-            parts_ = key.split(".")
-            for depth in range(1, len(parts_)):
-                node = ".".join(parts_[:depth])
+            names = key.split(".")
+            for depth in range(1, len(names)):
+                node = ".".join(names[:depth])
                 if not tree.exists(node):
-                    tree.insert(parent, "end", iid=node, text=parts_[depth - 1],
+                    tree.insert(parent, "end", iid=node, text=names[depth - 1],
                                 open=open_items is None or node in open_items)  # fmt: skip
                 parent = node
             if key in locked:
                 text, src, tag = locked[key], "Pipeline tab", "pipeline"
             elif key in state["overrides"]:
                 text, src, tag = format_value(value), "changed here", "override"
-            elif from_file[key] != defaults[key]:
+            elif from_file[key] != defaults_flat[key]:
                 text, src, tag = format_value(value), "YAML file", "file"
             else:
                 text, src, tag = format_value(value), "default", ""
-            tree.insert(parent, "end", iid=key, text=parts_[-1], values=(text, src), tags=(tag,))
+            tree.insert(parent, "end", iid=key, text=names[-1], values=(text, src), tags=(tag,))
         if selected and tree.exists(selected[0]):
             tree.selection_set(selected[0])
             tree.see(selected[0])
@@ -660,10 +743,8 @@ def main():  # noqa: C901  (UI construction is long but flat)
 
     def on_select(_event=None):
         sel = tree.selection()
-        if sel and sel[0] in state["comments"]:
-            desc.configure(text=f"{sel[0]}: {state['comments'][sel[0]]}")
-        elif sel:
-            desc.configure(text=sel[0])
+        if sel:
+            desc.configure(text=f"{sel[0]}: {state['comments'].get(sel[0], '')}".rstrip(": "))
 
     def edit_cell(event):
         key = tree.identify_row(event.y)
@@ -678,8 +759,12 @@ def main():  # noqa: C901  (UI construction is long but flat)
         entry.place(x=x, y=y, width=w, height=h)
         entry.focus_set()
         entry.select_range(0, "end")
+        done = {"flag": False}
 
         def commit(_e=None):
+            if done["flag"]:
+                return
+            done["flag"] = True
             text = entry.get().strip()
             entry.destroy()
             try:
@@ -695,9 +780,13 @@ def main():  # noqa: C901  (UI construction is long but flat)
                 state["overrides"][key] = text
             refresh_config()
 
+        def cancel(_e=None):
+            done["flag"] = True
+            entry.destroy()
+
         entry.bind("<Return>", commit)
         entry.bind("<KP_Enter>", commit)
-        entry.bind("<Escape>", lambda _e: entry.destroy())
+        entry.bind("<Escape>", cancel)
         entry.bind("<FocusOut>", commit)
 
     def revert_selected():
@@ -738,27 +827,152 @@ def main():  # noqa: C901  (UI construction is long but flat)
         write(f"saved configuration to {f} (now the base config)")
 
     def reset_config():
-        if messagebox.askyesno("WorldSynth", "Use configs/default.yaml and drop all values changed here?"):
-            v["config_file"].set("")
-            state["overrides"].clear()
-            refresh_config()
+        v["config_file"].set("")
+        state["overrides"].clear()
+        refresh_config()
 
     for text, cmd in [("Load YAML...", load_yaml), ("Save as YAML...", save_yaml), ("Revert selected", revert_selected),
                       ("Reset to defaults", reset_config)]:  # fmt: skip
         ttk.Button(cfg_btns, text=text, command=cmd).pack(side="left", padx=(0, 6))
     tree.bind("<<TreeviewSelect>>", on_select)
     tree.bind("<Double-1>", edit_cell)
-    notebook.bind("<<NotebookTabChanged>>", lambda _e: refresh_config() if notebook.index("current") == 1 else None)
+
+    # --- prompts tab -------------------------------------------------------------------------------------------------
+    prompt_tab = ttk.Frame(notebook, padding=6)
+    notebook.add(prompt_tab, text="Prompts")
+    ttk.Label(prompt_tab, wraplength=530, justify="left", foreground="#444", text=(
+        "Edit the Cosmos prompts (JSON). {parts} becomes your class names. Edits are used by the next run even if not "
+        "saved; Save writes them to the file. Which looks a run uses: Pipeline tab > Cosmos > Looks used."
+    )).pack(fill="x")  # fmt: skip
+    first_look = next((o for o in look_options if o.startswith("configs/cosmos/prompts/")), None)
+    look_pick_var = tk.StringVar(value=first_look or (look_options[0] if look_options else ""))
+    prompt_widgets = {}
+
+    def prompt_editor(title, pick_var, options, height):
+        box = ttk.LabelFrame(prompt_tab, text=title, padding=6)
+        box.pack(fill="both", expand=True, pady=4)
+        head = ttk.Frame(box)
+        head.pack(fill="x")
+        pick = ttk.Combobox(head, textvariable=pick_var, values=options, state="readonly", width=46)
+        pick.pack(side="left")
+        status_lbl = ttk.Label(head, text="", foreground="#0b5cad")
+        status_lbl.pack(side="left", padx=6)
+        text = scrolledtext.ScrolledText(box, height=height, font=("TkFixedFont", 9), wrap="word", undo=True)
+        text.pack(fill="both", expand=True, pady=4)
+        btns = ttk.Frame(box)
+        btns.pack(fill="x")
+        prompt_widgets[text] = (pick_var, status_lbl)
+        pick.bind("<<ComboboxSelected>>", lambda _e: show_prompt(text))
+        text.bind("<<Modified>>", lambda _e: on_prompt_modified(text))
+        for label, fn in [("Revert", lambda: revert_prompt(text)), ("Save", lambda: save_prompt(text, False)),
+                          ("Save as...", lambda: save_prompt(text, True))]:  # fmt: skip
+            ttk.Button(btns, text=label, command=fn).pack(side="left", padx=(0, 6))
+        return text
+
+    def stash_prompt(text):
+        """Keep the text box content as an edit of the file it shows (or drop the edit if unchanged)."""
+        rel = state["prompt_shown"].get(text)
+        if not rel:
+            return
+        content = text.get("1.0", "end-1c")
+        if content != (ROOT / rel).read_text():
+            state["prompt_edits"][rel] = content
+        else:
+            state["prompt_edits"].pop(rel, None)
+
+    def show_prompt(text):
+        stash_prompt(text)
+        pick_var, status_lbl = prompt_widgets[text]
+        rel = pick_var.get()
+        if not rel:
+            return
+        content = state["prompt_edits"].get(rel) or (ROOT / rel).read_text()
+        text.delete("1.0", "end")
+        text.insert("1.0", content)
+        text.edit_modified(False)
+        text.edit_reset()
+        state["prompt_shown"][text] = rel
+        status_lbl.configure(text="edited, not saved" if rel in state["prompt_edits"] else "")
+
+    def on_prompt_modified(text):
+        if text.edit_modified():
+            prompt_widgets[text][1].configure(text="edited, not saved")
+            text.edit_modified(False)
+
+    def revert_prompt(text):
+        rel = state["prompt_shown"].get(text)
+        if rel:
+            state["prompt_edits"].pop(rel, None)
+            state["prompt_shown"].pop(text, None)
+            show_prompt(text)
+
+    def save_prompt(text, as_new):
+        rel = state["prompt_shown"].get(text)
+        content = text.get("1.0", "end-1c")
+        try:
+            json.loads(content)
+        except json.JSONDecodeError as e:
+            messagebox.showerror("WorldSynth", f"Not valid JSON: {e}")
+            return
+        target = ROOT / rel
+        if as_new:
+            f = filedialog.asksaveasfilename(initialdir=str(target.parent), defaultextension=".json",
+                                             filetypes=[("JSON", "*.json")])  # fmt: skip
+            if not f:
+                return
+            target = Path(f)
+        target.write_text(content)
+        state["prompt_edits"].pop(rel, None)
+        if target.is_relative_to(ROOT / "configs" / "cosmos"):
+            new_rel = str(target.relative_to(ROOT))
+            for combo_values in (look_options, negatives):
+                if ("negative" in target.name) == (combo_values is negatives) and new_rel not in combo_values:
+                    combo_values.append(new_rel)
+            prompt_widgets[text][0].set(new_rel)
+        state["prompt_shown"].pop(text, None)
+        show_prompt(text)
+        write(f"saved prompt {target}")
+
+    look_text = prompt_editor("Look prompt (positive)", look_pick_var, look_options, 14)
+    neg_text = prompt_editor("Negative prompt", v["negative"], negatives, 9)
+
+    def all_prompt_edits() -> dict[str, str]:
+        for text in (look_text, neg_text):
+            stash_prompt(text)
+        return dict(state["prompt_edits"])
+
+    def on_tab(_e=None):
+        tab = notebook.index("current")
+        if tab == 1:
+            refresh_config()
+        elif tab == 2:
+            if v["prompt"].get() != ALL_LOOKS and v["prompt"].get() != look_pick_var.get():
+                look_pick_var.set(v["prompt"].get())
+            for text in (look_text, neg_text):
+                if state["prompt_shown"].get(text) != prompt_widgets[text][0].get():
+                    show_prompt(text)
+
+    notebook.bind("<<NotebookTabChanged>>", on_tab)
 
     # --- right side: buttons, image, log ----------------------------------------------------------------------------
-    btns = ttk.Frame(right, padding=(0, 0, 0, 6))
+    btns = ttk.Frame(right)
     btns.pack(fill="x")
     preview_btn = ttk.Button(btns, text="Preview frame", command=lambda: run_preview())
-    run_btn = ttk.Button(btns, text="Run pipeline", command=lambda: run_pipeline())
+    run_btn = ttk.Button(btns, text="Run all steps", command=lambda: run_stages(STAGES))
     stop_btn = ttk.Button(btns, text="Stop", command=lambda: stop(), state="disabled")
-    open_btn = ttk.Button(btns, text="Open output", command=lambda: open_output())
-    for b in (preview_btn, run_btn, stop_btn, open_btn):
+    for b in (preview_btn, run_btn, stop_btn):
         b.pack(side="left", padx=(0, 6))
+    ttk.Button(btns, text="Open dataset", command=lambda: open_dir(dataset_path(settings()))).pack(side="left", padx=6)
+    ttk.Button(btns, text="Open Cosmos folder", command=lambda: open_dir(cosmos_path(settings()))).pack(side="left")
+    steps_row = ttk.Frame(right, padding=(0, 4, 0, 6))
+    steps_row.pack(fill="x")
+    ttk.Label(steps_row, text="Steps:").pack(side="left", padx=(0, 6))
+    step_btns = []
+    for label, stage in [("1 Generate (Isaac Sim)", "generate"), ("2 Make Cosmos videos", "prepare"),
+                         ("3 Send to Cosmos", "send"), ("4 Fetch results", "fetch")]:  # fmt: skip
+        b = ttk.Button(steps_row, text=label, command=lambda st=stage: run_stages((st,)))
+        b.pack(side="left", padx=(0, 6))
+        step_btns.append(b)
     image_label = ttk.Label(right, text="Preview appears here", anchor="center", relief="groove")
     image_label.pack(fill="x", ipady=4)
     caption = ttk.Label(right, text="", foreground="#555")
@@ -795,7 +1009,7 @@ def main():  # noqa: C901  (UI construction is long but flat)
 
     # --- processes ---------------------------------------------------------------------------------------------------
     def set_busy(busy: bool, what: str = ""):
-        for b in (preview_btn, run_btn):
+        for b in [preview_btn, run_btn, *step_btns]:
             b.configure(state="disabled" if busy else "normal")
         stop_btn.configure(state="normal" if busy else "disabled")
         status.configure(text=what if busy else "ready")
@@ -820,9 +1034,9 @@ def main():  # noqa: C901  (UI construction is long but flat)
 
         threading.Thread(target=pump, daemon=True).start()
 
-    def prepare(s: GuiSettings, for_preview=False) -> Path | None:
+    def prepare(s: GuiSettings, stages=STAGES, for_preview=False) -> Path | None:
         """Check the settings and write the merged config; None if something is wrong."""
-        errors = validate(s, for_preview)
+        errors = validate(s, stages, for_preview)
         if errors:
             messagebox.showerror("WorldSynth", "\n".join(errors))
             return None
@@ -851,26 +1065,38 @@ def main():  # noqa: C901  (UI construction is long but flat)
         cmd = preview_command(s, config, out, isaaclab_python())
         start(cmd, env, "rendering preview (Isaac Sim starts, ~30 s)...", done, True)
 
-    def run_pipeline():
+    def run_stages(stages: tuple[str, ...]):
         s = settings()
-        config = prepare(s)
+        config = prepare(s, stages)
         if config is None:
             return
-        out = dataset_path(s)
+        try:
+            looks, negative = write_prompts(s, all_prompt_edits())
+        except ValueError as e:
+            messagebox.showerror("WorldSynth", str(e))
+            return
+        if state["prompt_edits"] and "prepare" in stages:
+            write(f"prompts with your edits: {', '.join(sorted(state['prompt_edits']))}")
+        data, batch = dataset_path(s), cosmos_path(s)
 
         def done(code):
             if code != 0:
-                write("pipeline stopped with an error, see the log above")
+                write("stopped with an error, see the log above")
                 return
-            clip = out / "clips" / "clip_0000"
-            img_dir = "rgb" if s.render_only else "rgb_cosmos"
-            frame = sorted((clip / img_dir).glob("*.png"))
-            if frame:
-                mid = frame[len(frame) // 2]
+            clip = data / "clips" / "clip_0000"
+            img_dir = "rgb_cosmos" if "fetch" in stages else "rgb"
+            frames = sorted((clip / img_dir).glob("*.png"))
+            if frames and ("generate" in stages or "fetch" in stages):
+                mid = frames[len(frames) // 2]
                 show_image(mid, clip / "labels" / f"{mid.stem}.json", f"{s.name}: {img_dir}/{mid.name} with labels")
-            write(f"done: dataset {out}" + ("" if s.render_only else f", Cosmos results {cosmos_path(s) / 'results'}"))
+            next_step = {"generate": "2 Make Cosmos videos", "prepare": "3 Send to Cosmos", "send": "4 Fetch results"}
+            last = stages[-1]
+            write(f"done ({', '.join(stages)}). dataset: {data}  Cosmos folder: {batch}"
+                  + (f"  next: {next_step[last]}" if last in next_step else ""))  # fmt: skip
 
-        start(pipeline_command(s, config), ssh_env(s), f"running pipeline {s.name}...", done)
+        what = "running all steps" if stages == STAGES else f"running step: {', '.join(stages)}"
+        cmd = pipeline_command(s, config, stages=stages, prompts=looks, negative=negative)
+        start(cmd, ssh_env(s), f"{what} ({s.name})...", done)
 
     def test_connection():
         s = settings()
@@ -893,17 +1119,23 @@ def main():  # noqa: C901  (UI construction is long but flat)
         proc = state["proc"]
         if proc and proc.poll() is None:
             os.killpg(proc.pid, signal.SIGTERM)
-            write("stopped. A Cosmos job already started on the Spark keeps running; run again with the same name "
+            write("stopped. A Cosmos job already started on the Spark keeps running; use '4 Fetch results' later "
                   "to wait for it and copy the results back.")  # fmt: skip
 
-    def open_output():
-        path = dataset_path(settings())
+    def open_dir(path: Path):
         subprocess.Popen(["xdg-open", str(path if path.exists() else path.parent)])
+
+    def restore_session():
+        if not SETTINGS_FILE.exists():
+            messagebox.showinfo("WorldSynth", "No saved session yet (settings are saved when you run).")
+            return
+        apply_settings(load_settings())
+        write(f"restored the settings of the last session from {SETTINGS_FILE}")
 
     def poll():
         try:
             while True:
-                kind, a, b = state["queue"].get_nowait()
+                kind, a, _ = state["queue"].get_nowait()
                 if kind == "log":
                     write(a.rstrip("\n"))
                 elif kind == "done":
@@ -912,7 +1144,7 @@ def main():  # noqa: C901  (UI construction is long but flat)
                     if state["after_run"]:
                         state["after_run"](a)
                 elif kind == "scene":
-                    show_scene(a, b)
+                    show_scene(a)
                 elif kind == "scene_error":
                     scene_info_label.configure(text=f"could not read scene: {a}")
         except queue.Empty:
@@ -920,7 +1152,6 @@ def main():  # noqa: C901  (UI construction is long but flat)
         app.after(100, poll)
 
     def on_close():
-        save_settings(settings())
         if state["proc"] and state["proc"].poll() is None:
             if not messagebox.askyesno("WorldSynth", "A run is in progress. Stop it and quit?"):
                 return
@@ -928,15 +1159,19 @@ def main():  # noqa: C901  (UI construction is long but flat)
         app.destroy()
 
     update_scene_state()
-    if s0.use_scene and s0.scene_usd:
-        load_scene(select_saved=True)
-    write("WorldSynth GUI. Settings are saved in " + str(SETTINGS_FILE) + " (the password is never saved).")
+    refresh_config()
+    write("WorldSynth GUI: all settings start at their defaults ('Restore last session' brings back the last run's).")
+    write("The password is never saved.")
     app.protocol("WM_DELETE_WINDOW", on_close)
     app.after(100, poll)
-    if "--preview" in sys.argv[1:]:  # render a preview of the saved setup right away
+    if "--restore" in sys.argv[1:]:
+        app.after(200, restore_session)
+    if "--preview" in sys.argv[1:]:  # render a preview of the restored setup right away
         app.after(1500, run_preview)
     if "--config-tab" in sys.argv[1:]:
         app.after(500, lambda: notebook.select(1))
+    if "--prompts-tab" in sys.argv[1:]:
+        app.after(500, lambda: notebook.select(2))
     app.mainloop()
 
 

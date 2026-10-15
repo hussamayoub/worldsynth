@@ -44,8 +44,12 @@ kuka README "Cosmos Transfer on the DGX Spark").
 
 ```bash
 cd ~/research/isaaclab/worldsynth
-scripts/gui.sh              # --preview: render a preview of the saved setup right after start
+scripts/gui.sh              # starts with the default settings; --restore loads the settings of the last run
 ```
+
+The window has three tabs on the left and the run controls on the right. Every start uses the defaults;
+**Restore last session** brings back the settings of the last run (saved in `~/.config/worldsynth/gui.json`,
+`WORLDSYNTH_GUI_SETTINGS` overrides), **Defaults** resets them.
 
 **Pipeline tab**
 
@@ -53,27 +57,39 @@ scripts/gui.sh              # --preview: render a preview of the saved setup rig
   or a folder.
 - **Scene:** the built-in workcell, or a predesigned USD scene. After opening a scene, pick a **camera** from it
   (or random cameras around the parts), the **surface** to place the parts on, optionally the **parts in the scene**
-  (a prim whose children are parts; *place randomly* or *keep as in scene*), set how far the camera moves over
-  a clip, and whether to use only the scene's own lights (default; added lights tend to wash a lit scene out, and
-  Cosmos then invents objects in the blank areas).
+  (a prim whose children are parts; *place randomly* or *keep as in scene*), how far the camera moves over a clip,
+  and whether to use only the scene's own lights (default; added lights tend to wash a lit scene out, and Cosmos
+  then invents objects in the blank areas).
 - **Output:** the run name, the **dataset folder** (where Isaac Sim writes; empty: `output/<name>`) and the
-  **Cosmos folder** (the batch sent to the Spark; Cosmos results are copied back to `<folder>/results`; empty:
+  **Cosmos folder** (Cosmos input videos and batch; results are copied back to `<folder>/results`; empty:
   `output/<name>_cosmos`).
 - **Dataset:** clips, frames per clip, parts per clip, clutter.
-- **Cosmos:** resolution (256 or 480), steps, looks per clip, look and negative prompt, or "Render only".
+- **Cosmos:** resolution (256 or 480), steps, looks per clip, which looks to use and the negative prompt.
 - **Spark:** host/IP, user and password, with **Test connection** (login, Cosmos runner, free memory). The password is
   only passed to `ssh` in the environment of the run; it is never saved (leave it empty with SSH keys).
 
-**Configuration tab:** every setting of the YAML config, with where its value comes from. **Load YAML...** picks the
-base config (default `configs/default.yaml`); double-click a value to change it (shown in blue, checked right away);
-**Revert selected**, **Reset to defaults**, and **Save as YAML...** to keep the result as a config file. Values set
-on the Pipeline tab are grey: the Pipeline tab wins. Selecting a key shows its description from `default.yaml`.
+**Configuration tab:** every setting of the YAML config with where its value comes from. **Load YAML...** picks the
+base config (default `configs/default.yaml`); double-click a value to change it (blue, checked right away);
+**Revert selected**, **Reset to defaults**, **Save as YAML...** to keep the result as a config file. Values set on the
+Pipeline tab are grey: the Pipeline tab wins. Selecting a key shows its description from `default.yaml`.
 
-**Buttons:** **Preview frame** renders one labelled frame (Isaac Sim starts, ~30 s) to check camera, surface and part
-size. **Run pipeline** runs `scripts/run_pipeline.sh` with the base config plus your changes (merged into
-`cache/gui_run_config.yaml`) and streams the log; at the end it shows a labelled Cosmos frame. **Stop** ends the local
-run (a Cosmos job already on the Spark finishes; run again with the same name to collect it). **Open output** opens
-the dataset folder. Settings are saved in `~/.config/worldsynth/gui.json` (`WORLDSYNTH_GUI_SETTINGS` overrides).
+**Prompts tab:** the look prompt and the negative prompt as editable text (JSON; `{parts}` becomes your class names).
+Edits are used by the next run even when not saved; **Save** writes them to the file, **Save as...** to a new file
+(new files in `configs/cosmos/` appear in the lists), **Revert** drops the edits.
+
+**Run controls:** **Preview frame** renders one labelled frame (Isaac Sim starts, ~30 s) to check camera, surface and
+part size. **Run all steps** runs the whole pipeline; the **steps** can also run one at a time:
+
+| Button | Does | Result |
+|---|---|---|
+| 1 Generate (Isaac Sim) | renders the clips with all labels | dataset folder |
+| 2 Make Cosmos videos | turns each clip into Cosmos input videos (rgb, depth, segmentation), prompts and specs | Cosmos folder `inputs/`, `specs/` |
+| 3 Send to Cosmos | uploads the batch to the Spark and starts Cosmos there; returns right away | Cosmos runs on the Spark |
+| 4 Fetch results | waits until Cosmos is done, copies the results back and imports them | Cosmos folder `results/`, `rgb_cosmos/` and COCO in the dataset, side-by-side videos |
+
+A step uses what the previous ones left in the dataset and Cosmos folders, so steps can run at different times (for
+example send, close the GUI, and fetch the next day). **Stop** ends the local process; a Cosmos job already on the
+Spark keeps running. **Open dataset** / **Open Cosmos folder** open the folders.
 
 ## Command line: `scripts/run_pipeline.sh`
 
@@ -119,11 +135,12 @@ scripts/run_pipeline.sh --cad assets/lego --name lego_480 --clips 1 --res 480 --
 | `--scene-parts PRIM`, `--scene-parts-mode place\|keep` | Children of PRIM are labelled parts of the scene (see below); `--cad` becomes optional |
 | `--spark USER@HOST` | Cosmos machine (default `h@100.123.185.58`) |
 | `--set KEY=VALUE` | Any config override, repeatable |
-| `--skip-sim`, `--skip-cosmos` | Only the Cosmos part (reuse the dataset), or only the dataset |
+| `--stages LIST` | Steps to run, comma separated: `generate`, `prepare` (Cosmos input videos), `send` (upload and start Cosmos, no waiting), `fetch` (wait, copy back, import); default all |
+| `--skip-sim`, `--skip-cosmos` | Same as `--stages prepare,send,fetch` / `--stages generate` |
 
 - **Resuming:** re-running with the same `--name` keeps finished clips, finished Cosmos jobs and copied outputs. If
-  the workstation or the connection drops while Cosmos runs, Cosmos keeps running on the Spark; re-run the same
-  command with `--skip-sim` to wait for it and copy the results back.
+  the workstation or the connection drops while Cosmos runs, Cosmos keeps running on the Spark; run the same command
+  with `--stages fetch` to wait for it and copy the results back.
 - **Background:** `nohup scripts/run_pipeline.sh ... > run_001.log 2>&1 &`, then `tail -f run_001.log`.
 - **SSH:** the Spark password is asked once per run (`ssh-copy-id h@100.123.185.58` removes the prompt).
   `ISAACLAB_DIR` overrides the Isaac Lab checkout (default `../IsaacLab`).

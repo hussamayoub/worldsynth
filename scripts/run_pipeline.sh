@@ -29,8 +29,13 @@
 #                      keep: parts stay where the scene puts/animates them (still labelled, random materials)
 #   --scene-lights-only  light the scene with its own lights only (no added randomized lights)
 #   --spark USER@HOST  Cosmos machine (default $SPARK or h@100.123.185.58)
-#   --skip-sim         reuse the dataset already in the dataset folder (only the Cosmos part)
-#   --skip-cosmos      only render the dataset
+#   --stages LIST      which steps to run, comma separated (default generate,prepare,send,fetch):
+#                        generate  render the dataset in Isaac Sim
+#                        prepare   turn the clips into Cosmos input videos (rgb/depth/seg), prompts and specs
+#                        send      upload the batch to the Spark and start Cosmos there (does not wait)
+#                        fetch     wait until Cosmos is done, copy the results back and import them
+#   --skip-sim         same as --stages prepare,send,fetch
+#   --skip-cosmos      same as --stages generate
 #   --set KEY=VALUE    extra generate.py config override, repeatable (e.g. --set camera.distance=[0.4,0.7])
 #
 # Environment:
@@ -48,8 +53,8 @@ SPARK=${SPARK:-h@100.123.185.58}
 WS_SSH_CONTROL=${WS_SSH_CONTROL:-$HOME/.ssh/ws-%C}
 
 CAD="" NAME="" CLIPS=20 FRAMES=61 RES=256 STEPS=50 LOOKS=1 CLUTTER=true UNITS=auto CLASS_FROM=file
-SKIP_SIM=false SKIP_COSMOS=false EXTRA=() PROMPTS=() NEGATIVE=$ROOT/configs/cosmos/negative_prompt.json
-SCENE_ARGS=() SCENE_PARTS="" CONFIG=$ROOT/configs/default.yaml DATASET="" BATCH=""
+EXTRA=() PROMPTS=() NEGATIVE=$ROOT/configs/cosmos/negative_prompt.json
+STAGES=generate,prepare,send,fetch SCENE_ARGS=() SCENE_PARTS="" CONFIG=$ROOT/configs/default.yaml DATASET="" BATCH=""
 while [[ $# -gt 0 ]]; do
   case $1 in
     --cad) CAD=$(realpath "$2"); shift 2 ;;
@@ -74,14 +79,19 @@ while [[ $# -gt 0 ]]; do
     --scene-parts) SCENE_ARGS+=("scene.scene_parts=$2"); SCENE_PARTS=$2; shift 2 ;;
     --scene-parts-mode) SCENE_ARGS+=("scene.scene_parts_mode=$2"); shift 2 ;;
     --spark) SPARK=$2; shift 2 ;;
-    --skip-sim) SKIP_SIM=true; shift ;;
-    --skip-cosmos) SKIP_COSMOS=true; shift ;;
+    --stages) STAGES=$2; shift 2 ;;
+    --skip-sim) STAGES=prepare,send,fetch; shift ;;
+    --skip-cosmos) STAGES=generate; shift ;;
     --set) EXTRA+=("$2"); shift 2 ;;
     -h|--help) sed -n '2,/^set -euo/{/^#/p}' "$0"; exit 0 ;;
     *) echo "unknown option $1 (see --help)"; exit 1 ;;
   esac
 done
 [[ -n $NAME ]] || { echo "--name is required"; exit 1; }
+for st in ${STAGES//,/ }; do
+  [[ $st =~ ^(generate|prepare|send|fetch)$ ]] || { echo "unknown stage $st (generate, prepare, send, fetch)"; exit 1; }
+done
+want() { [[ ",$STAGES," == *",$1,"* ]]; }
 REMOTE_BASE=/home/${SPARK%%@*}/cosmos-work/worldsynth
 REMOTE_OUTPUTS=/home/${SPARK%%@*}/cosmos-work/cosmos/cookbooks/cosmos3/generator/transfer/outputs/Cosmos3-Nano
 case $RES in
@@ -100,8 +110,8 @@ SSH=(ssh $SSH_OPTS "$SPARK")
 RSYNC_SSH="ssh $SSH_OPTS"
 step() { echo; echo "=== $(date +%T) $*"; }
 
-# 1. render the dataset ------------------------------------------------------------------------------------------------
-if ! $SKIP_SIM; then
+# 1. generate: render the dataset ---------------------------------------------------------------------------------------
+if want generate; then
   if [[ -n $CAD ]]; then
     [[ -d $CAD ]] || { echo "--cad folder not found: $CAD"; exit 1; }
     CAD_ARG="cad.dir=$CAD"
@@ -109,7 +119,7 @@ if ! $SKIP_SIM; then
     [[ -n $SCENE_PARTS ]] || { echo "--cad is required (or --scene-parts)"; exit 1; }
     CAD_ARG="cad.dir=null"
   fi
-  step "1/5 Isaac Sim: $CLIPS clips x $FRAMES frames at ${WIDTH}x720 from ${CAD:-the scene parts}"
+  step "generate: Isaac Sim, $CLIPS clips x $FRAMES frames at ${WIDTH}x720 from ${CAD:-the scene parts}"
   (cd "$ISAACLAB_DIR" && "$PY" "$ROOT/scripts/generate.py" --config "$CONFIG" \
     "$CAD_ARG" "cad.cache_dir=$ROOT/cache/usd" "cad.units=$UNITS" "cad.class_from=$CLASS_FROM" \
     "output.dir=$DATASET" "dataset.num_clips=$CLIPS" "dataset.frames_per_clip=$FRAMES" \
@@ -117,59 +127,71 @@ if ! $SKIP_SIM; then
     | grep --line-buffered -E '^\[worldsynth\]|Error|Traceback|^ +File|Exception' ) || true
   [[ -f $DATASET/annotations/coco_rgb.json ]] || { echo "dataset generation failed (no COCO file)"; exit 1; }
   "$PY" "$ROOT/scripts/visualize.py" "$DATASET" --clip 0 --all --video > /dev/null
-  echo "label preview: $DATASET/viz/rgb/clip_0000.mp4"
+  echo "dataset: $DATASET   (label preview: $DATASET/viz/rgb/clip_0000.mp4)"
 fi
-$SKIP_COSMOS && { echo "done (dataset only): $DATASET"; exit 0; }
 
-# 2. Cosmos batch ------------------------------------------------------------------------------------------------------
-step "2/5 Cosmos batch ($RES, $STEPS steps, $LOOKS look(s) per clip)"
-"$PY" "$ROOT/scripts/cosmos_prepare.py" "$DATASET" --out "$BATCH" --remote_dir "$REMOTE_BATCH" \
-  --resolution "$RES" --num_steps "$STEPS" --variants_per_clip "$LOOKS" --negative_prompt "$NEGATIVE" --job_prefix "$JOB_PREFIX" \
-  ${PROMPTS[@]+--prompts "${PROMPTS[@]}"}
+# 2. prepare: Cosmos input videos, prompts and specs --------------------------------------------------------------------
+if want prepare; then
+  [[ -f $DATASET/dataset.json ]] || { echo "no dataset in $DATASET (run the generate step first)"; exit 1; }
+  step "prepare: Cosmos batch ($RES, $STEPS steps, $LOOKS look(s) per clip) in $BATCH"
+  "$PY" "$ROOT/scripts/cosmos_prepare.py" "$DATASET" --out "$BATCH" --remote_dir "$REMOTE_BATCH" \
+    --resolution "$RES" --num_steps "$STEPS" --variants_per_clip "$LOOKS" --negative_prompt "$NEGATIVE" \
+    --job_prefix "$JOB_PREFIX" ${PROMPTS[@]+--prompts "${PROMPTS[@]}"}
+  echo "Cosmos input videos: $BATCH/inputs/<clip>/{vision,depth,seg}.mp4"
+fi
 
-# 3. upload and run on the Spark ---------------------------------------------------------------------------------------
-step "3/5 upload to $SPARK:$REMOTE_BATCH"
-"${SSH[@]}" "mkdir -p $REMOTE_BASE && test -x ~/cosmos-work/run_transfer.sh" \
-  || { echo "~/cosmos-work/run_transfer.sh missing on the Spark (copy kuka/scripts/cosmos/run_transfer.sh)"; exit 1; }
-rsync -a --exclude results -e "$RSYNC_SSH" "$BATCH/" "$SPARK:$REMOTE_BATCH/"
-
-step "4/5 Cosmos running on the Spark (log: $REMOTE_BATCH.log)"
-# Detached, so a dropped connection does not stop it; re-running this script resumes and skips finished jobs.
-# A lock serializes WorldSynth batches, and the job waits until no other Cosmos inference is using the GPU.
-"${SSH[@]}" "rm -f $REMOTE_BATCH/DONE; nohup flock $REMOTE_BASE/.lock sh -c '
-  while pgrep -f \"[c]osmos_framework.scripts.inference\" > /dev/null; do echo waiting for running Cosmos job; sleep 30; done
-  $REMOTE_BATCH/run_batch.sh && touch $REMOTE_BATCH/DONE' > $REMOTE_BATCH.log 2>&1 < /dev/null &"
-TOTAL=$("$PY" -c "import json; print(len(json.load(open('$BATCH/manifest.json'))['jobs']))")
-LAST=""
-while ! "${SSH[@]}" "test -f $REMOTE_BATCH/DONE"; do
-  DONE=$("${SSH[@]}" "ls -d $REMOTE_OUTPUTS/${JOB_PREFIX}__*/vision.mp4 2>/dev/null | wc -l")
-  NOW=$("${SSH[@]}" "tail -qn1 $REMOTE_BATCH.log; ls -t ~/cosmos-work/run_${JOB_PREFIX}__*.log 2>/dev/null | grep -v _mem.log | head -1 \
-    | xargs -r grep -ho '[0-9]*/[0-9]* \[[^]]*\]' | tail -1" | tr '\n' ' ' || true)
-  MSG="jobs done $DONE/$TOTAL, current: ${NOW:-starting}"
-  [[ $MSG != "$LAST" ]] && echo "$(date +%T) $MSG"
-  LAST=$MSG
-  sleep 60
-  if ! "${SSH[@]}" "test -f $REMOTE_BATCH/DONE || pgrep -f '$REMOTE_BATCH/[r]un_batch.sh' > /dev/null"; then
-    echo "the Cosmos batch stopped without finishing; see $SPARK:$REMOTE_BATCH.log"; exit 1
+# 3. send: upload and start Cosmos on the Spark ------------------------------------------------------------------------
+if want send; then
+  [[ -f $BATCH/manifest.json ]] || { echo "no Cosmos batch in $BATCH (run the prepare step first)"; exit 1; }
+  step "send: upload to $SPARK:$REMOTE_BATCH"
+  "${SSH[@]}" "mkdir -p $REMOTE_BASE && test -x ~/cosmos-work/run_transfer.sh" \
+    || { echo "~/cosmos-work/run_transfer.sh missing on the Spark (copy kuka/scripts/cosmos/run_transfer.sh)"; exit 1; }
+  rsync -a --exclude results -e "$RSYNC_SSH" "$BATCH/" "$SPARK:$REMOTE_BATCH/"
+  if "${SSH[@]}" "pgrep -f '$REMOTE_BATCH/[r]un_batch.sh' > /dev/null"; then
+    echo "this batch is already running on the Spark"
+  else
+    # Detached, so a dropped connection does not stop it; finished jobs are skipped when started again.
+    # A lock serializes WorldSynth batches, and the job waits until no other Cosmos inference is using the GPU.
+    "${SSH[@]}" "rm -f $REMOTE_BATCH/DONE; nohup flock $REMOTE_BASE/.lock sh -c '
+      while pgrep -f \"[c]osmos_framework.scripts.inference\" > /dev/null; do echo waiting for running Cosmos job; sleep 30; done
+      $REMOTE_BATCH/run_batch.sh && touch $REMOTE_BATCH/DONE' > $REMOTE_BATCH.log 2>&1 < /dev/null &"
+    echo "Cosmos started on the Spark (log: $REMOTE_BATCH.log); use the fetch step to wait for it and copy back"
   fi
-done
-"${SSH[@]}" "grep -h '^exit' ~/cosmos-work/run_${JOB_PREFIX}__*.log | sort | uniq -c"
+fi
 
-# 5. copy back and import ----------------------------------------------------------------------------------------------
-step "5/5 copy outputs back and import"
-mkdir -p "$BATCH/results"
-rsync -a -e "$RSYNC_SSH" --include "${JOB_PREFIX}__*/***" --exclude '*' "$SPARK:$REMOTE_OUTPUTS/" "$BATCH/results/"
-"$PY" "$ROOT/scripts/cosmos_import.py" "$DATASET" --batch "$BATCH" --results "$BATCH/results"
-for d in "$DATASET"/clips/clip_0000/rgb_cosmos*; do
-  [[ -d $d ]] || continue
-  "$PY" "$ROOT/scripts/visualize.py" "$DATASET" --image_dir "$(basename "$d")" --clip 0 --all --video > /dev/null
-  "$PY" "$ROOT/scripts/visualize.py" "$DATASET" --image_dir "$(basename "$d")" --all_clips --side_by_side
-done
-
-echo
-echo "dataset:          $DATASET"
-echo "COCO files:       $DATASET/annotations/"
-echo "Cosmos report:    $DATASET/annotations/rgb_cosmos_report.json"
-echo "Cosmos videos:    $BATCH/results/<job>/vision.mp4"
-echo "label previews:   $DATASET/viz/"
-echo "side by side:     $DATASET/viz/side_by_side_rgb_cosmos/<clip>.mp4  (render | Cosmos | labels)"
+# 4. fetch: wait for Cosmos, copy back, import -------------------------------------------------------------------------
+if want fetch; then
+  [[ -f $BATCH/manifest.json ]] || { echo "no Cosmos batch in $BATCH (run the prepare and send steps first)"; exit 1; }
+  step "fetch: waiting for Cosmos on the Spark (log: $REMOTE_BATCH.log)"
+  TOTAL=$("$PY" -c "import json; print(len(json.load(open('$BATCH/manifest.json'))['jobs']))")
+  LAST=""
+  while ! "${SSH[@]}" "test -f $REMOTE_BATCH/DONE"; do
+    if ! "${SSH[@]}" "pgrep -f '$REMOTE_BATCH/[r]un_batch.sh' > /dev/null"; then
+      echo "Cosmos is not running for this batch and has not finished; run the send step (log: $SPARK:$REMOTE_BATCH.log)"
+      exit 1
+    fi
+    DONE=$("${SSH[@]}" "ls -d $REMOTE_OUTPUTS/${JOB_PREFIX}__*/vision.mp4 2>/dev/null | wc -l")
+    NOW=$("${SSH[@]}" "tail -qn1 $REMOTE_BATCH.log; ls -t ~/cosmos-work/run_${JOB_PREFIX}__*.log 2>/dev/null | grep -v _mem.log | head -1 \
+      | xargs -r grep -ho '[0-9]*/[0-9]* \[[^]]*\]' | tail -1" | tr '\n' ' ' || true)
+    MSG="jobs done $DONE/$TOTAL, current: ${NOW:-starting}"
+    [[ $MSG != "$LAST" ]] && echo "$(date +%T) $MSG"
+    LAST=$MSG
+    sleep 30
+  done
+  "${SSH[@]}" "grep -h '^exit' ~/cosmos-work/run_${JOB_PREFIX}__*.log | sort | uniq -c" || true
+  step "fetch: copy back to $BATCH/results and import"
+  mkdir -p "$BATCH/results"
+  rsync -a -e "$RSYNC_SSH" --include "${JOB_PREFIX}__*/***" --exclude '*' "$SPARK:$REMOTE_OUTPUTS/" "$BATCH/results/"
+  "$PY" "$ROOT/scripts/cosmos_import.py" "$DATASET" --batch "$BATCH" --results "$BATCH/results"
+  for d in "$DATASET"/clips/clip_0000/rgb_cosmos*; do
+    [[ -d $d ]] || continue
+    "$PY" "$ROOT/scripts/visualize.py" "$DATASET" --image_dir "$(basename "$d")" --clip 0 --all --video > /dev/null
+    "$PY" "$ROOT/scripts/visualize.py" "$DATASET" --image_dir "$(basename "$d")" --all_clips --side_by_side
+  done
+  echo
+  echo "dataset:          $DATASET"
+  echo "COCO files:       $DATASET/annotations/"
+  echo "Cosmos report:    $DATASET/annotations/rgb_cosmos_report.json"
+  echo "Cosmos videos:    $BATCH/results/<job>/vision.mp4"
+  echo "side by side:     $DATASET/viz/side_by_side_rgb_cosmos/<clip>.mp4  (render | Cosmos | labels)"
+fi

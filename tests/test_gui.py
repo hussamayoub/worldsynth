@@ -53,12 +53,13 @@ def test_pipeline_command_with_scene_camera_and_folders(tmp_path):
 
 
 def test_default_folders_follow_run_name(tmp_path):
-    s = _settings(tmp_path, clutter=False, render_only=True)
+    s = _settings(tmp_path, clutter=False)
     assert gui.dataset_path(s, tmp_path) == tmp_path / "output" / "run_x"
     assert gui.cosmos_path(s, tmp_path) == tmp_path / "output" / "run_x_cosmos"
-    cmd = gui.pipeline_command(s, tmp_path / "c.yaml", tmp_path)
-    assert "--scene" not in cmd and "--no-clutter" in cmd and "--skip-cosmos" in cmd
+    cmd = gui.pipeline_command(s, tmp_path / "c.yaml", tmp_path, stages=("generate",))
+    assert "--scene" not in cmd and "--no-clutter" in cmd and cmd[cmd.index("--stages") + 1] == "generate"
     assert not any(c.startswith("camera.") for c in _sets(cmd))
+    assert gui.pipeline_command(s, tmp_path / "c.yaml", tmp_path)[5:7] == ["--stages", "generate,prepare,send,fetch"]
 
 
 def test_run_config_merges_yaml_and_overrides(tmp_path):
@@ -89,9 +90,11 @@ def test_validate(tmp_path):
     assert gui.validate(_settings(tmp_path)) == []
     assert gui.validate(_settings(tmp_path, use_scene=True))  # no surface chosen
     assert gui.validate(_settings(tmp_path, name="bad name"))
-    assert gui.validate(_settings(tmp_path, spark_host="")) and not gui.validate(
-        _settings(tmp_path, spark_host="", render_only=True)
-    )
+    no_spark = _settings(tmp_path, spark_host="")
+    assert gui.validate(no_spark) and not gui.validate(no_spark, ("generate", "prepare"))
+    assert gui.validate(no_spark, ("fetch",))
+    # later steps do not need the CAD folder any more
+    assert gui.validate(_settings(tmp_path, cad_dir="/no/such/dir"), ("send", "fetch")) == []
     assert gui.validate(_settings(tmp_path, name="bad name"), for_preview=True) == []
 
 
@@ -121,3 +124,26 @@ def test_scene_parts_make_cad_folder_optional(tmp_path):
     keys = gui.pipeline_keys(s, tmp_path)
     assert keys["cad.dir"] == "null" and keys["scene.scene_parts_mode"] == "keep"
     assert gui.validate(_settings(tmp_path, cad_dir=""))  # no CAD folder and no scene parts
+
+
+def test_write_prompts_uses_edits_and_checks_json(tmp_path):
+    root = tmp_path
+    (root / "configs" / "cosmos" / "prompts").mkdir(parents=True)
+    (root / "configs" / "cosmos" / "prompts" / "a.json").write_text('{"look": "a"}')
+    (root / "configs" / "cosmos" / "prompts" / "b.json").write_text('{"look": "b"}')
+    (root / "configs" / "cosmos" / "negative_prompt.json").write_text('{"avoid": "x"}')
+    s = _settings(tmp_path)  # all looks
+    edits = {"configs/cosmos/prompts/b.json": '{"look": "B edited"}'}
+    looks, negative = gui.write_prompts(s, edits, tmp_path / "out", root)
+    assert [p.name for p in looks] == ["a.json", "b.json"]
+    assert json.loads(looks[1].read_text()) == {"look": "B edited"}
+    assert json.loads((root / "configs/cosmos/prompts/b.json").read_text()) == {"look": "b"}  # file untouched
+    assert json.loads(negative.read_text()) == {"avoid": "x"}
+    one = _settings(tmp_path, prompt="configs/cosmos/prompts/a.json")
+    assert [p.name for p in gui.write_prompts(one, {}, tmp_path / "out", root)[0]] == ["a.json"]
+    import pytest
+
+    with pytest.raises(ValueError, match="not valid JSON"):
+        gui.write_prompts(s, {"configs/cosmos/negative_prompt.json": "{broken"}, tmp_path / "out", root)
+    cmd = gui.pipeline_command(s, tmp_path / "c.yaml", root, prompts=looks, negative=negative)
+    assert cmd.count("--prompts") == 2 and cmd[cmd.index("--negative") + 1] == str(negative)
