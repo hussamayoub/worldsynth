@@ -10,3 +10,10 @@ dist/
 output/
 outputs/
 cache/
+
+# local scenes (only the example scene is part of the repo) and datasets
+assets/scenes/*
+!assets/scenes/example_cell.usda
+datasets/
+*.hdf5
+*.h5
