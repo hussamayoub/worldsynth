@@ -38,6 +38,7 @@ RUN_CONFIG = ROOT / "cache" / "gui_run_config.yaml"
 ASKPASS = Path.home() / ".cache" / "worldsynth" / "askpass.sh"
 ALL_LOOKS = "all looks in configs/cosmos/prompts"
 RANDOM_CAMERA = "(random cameras around the parts)"
+NO_SCENE_PARTS = "(none: parts only from the CAD folder)"
 
 
 @dataclass
@@ -50,6 +51,9 @@ class GuiSettings:
     scene_camera: str = ""
     """Empty: sample cameras around the parts."""
     scene_surface: str = ""
+    scene_parts: str = ""
+    """Prim in the scene whose children are labelled parts; empty: none."""
+    scene_parts_mode: str = "place"
     scene_lights_only: bool = True
     """A predesigned scene is usually lit already; added random lights tend to wash it out."""
     camera_azimuth: float = 10.0
@@ -166,7 +170,7 @@ def pipeline_keys(s: GuiSettings, root: Path = ROOT) -> dict[str, str]:
     """Config keys the Pipeline tab sets (they override the YAML and the Configuration tab)."""
     width = 1200 if s.resolution == "256" else 1248
     keys = {
-        "cad.dir": s.cad_dir,
+        "cad.dir": s.cad_dir or "null",
         "cad.cache_dir": str(root / "cache" / "usd"),
         "cad.units": s.units,
         "cad.class_from": s.class_from,
@@ -182,6 +186,8 @@ def pipeline_keys(s: GuiSettings, root: Path = ROOT) -> dict[str, str]:
     if s.use_scene:
         keys.update({"scene.scene_usd": s.scene_usd, "scene.scene_surface": s.scene_surface})
         keys["scene.scene_lights_only"] = str(s.scene_lights_only).lower()
+        if s.scene_parts:
+            keys.update({"scene.scene_parts": s.scene_parts, "scene.scene_parts_mode": s.scene_parts_mode})
         if s.scene_camera:
             a, e = abs(s.camera_azimuth), abs(s.camera_elevation)
             keys.update({
@@ -216,8 +222,11 @@ def write_run_config(s: GuiSettings, path: Path = RUN_CONFIG) -> Path:
 def validate(s: GuiSettings, for_preview: bool = False) -> list[str]:
     """Problems that block a run, as messages for the user."""
     errors = []
-    if not s.cad_dir or not Path(s.cad_dir).is_dir():
-        errors.append("Choose the folder with the CAD/STL files.")
+    scene_parts = s.use_scene and s.scene_parts
+    if s.cad_dir and not Path(s.cad_dir).is_dir():
+        errors.append(f"CAD folder not found: {s.cad_dir}")
+    elif not s.cad_dir and not scene_parts:
+        errors.append("Choose the folder with the CAD/STL files (or parts in the USD scene).")
     if s.use_scene:
         if not s.scene_usd or not Path(s.scene_usd).is_file():
             errors.append("Choose the USD scene file.")
@@ -255,12 +264,16 @@ def scene_args(s: GuiSettings) -> list[str]:
         args += ["--scene-camera", s.scene_camera]
     if s.scene_lights_only:
         args.append("--scene-lights-only")
+    if s.scene_parts:
+        args += ["--scene-parts", s.scene_parts, "--scene-parts-mode", s.scene_parts_mode]
     return args
 
 
 def pipeline_command(s: GuiSettings, config: Path, root: Path = ROOT) -> list[str]:
     """Command line of ``run_pipeline.sh`` for these settings (without secrets)."""
-    cmd = [str(root / "scripts" / "run_pipeline.sh"), "--cad", s.cad_dir, "--name", s.name, "--config", str(config)]
+    cmd = [str(root / "scripts" / "run_pipeline.sh"), "--name", s.name, "--config", str(config)]
+    if s.cad_dir:
+        cmd += ["--cad", s.cad_dir]
     cmd += ["--dataset-dir", str(dataset_path(s, root)), "--cosmos-dir", str(cosmos_path(s, root))]
     cmd += ["--clips", str(s.clips), "--frames", str(s.frames), "--res", s.resolution, "--steps", str(s.steps)]
     cmd += ["--looks", str(s.looks), "--units", s.units, "--class-from", s.class_from]
@@ -360,6 +373,8 @@ def main():  # noqa: C901  (UI construction is long but flat)
         cam = data["scene_camera"]
         data["scene_camera"] = "" if cam == RANDOM_CAMERA else cam.split("   ")[0]
         data["scene_surface"] = data["scene_surface"].split("   ")[0]
+        parts = data["scene_parts"]
+        data["scene_parts"] = "" if parts == NO_SCENE_PARTS else parts.split("   ")[0]
         return GuiSettings(**data)
 
     # --- layout: tabs on the left, buttons + preview + log on the right -----------------------------------------------
@@ -416,6 +431,7 @@ def main():  # noqa: C901  (UI construction is long but flat)
                                      state="readonly", width=10))  # fmt: skip
     row(fr, 2, "Class per", ttk.Combobox(fr, textvariable=v["class_from"], values=["file", "folder"],
                                          state="readonly", width=10))  # fmt: skip
+    hint(fr, 3, "optional when the USD scene provides the parts (Scene: Parts in scene)")
 
     # scene
     fr = section("Scene")
@@ -444,16 +460,27 @@ def main():  # noqa: C901  (UI construction is long but flat)
     row(fr, 3, "Camera", camera_box)
     surface_box = ttk.Combobox(fr, textvariable=v["scene_surface"], state="readonly", width=30)
     row(fr, 4, "Place parts on", surface_box)
+    parts_box = ttk.Combobox(fr, textvariable=v["scene_parts"], state="readonly", width=30)
+    row(fr, 5, "Parts in scene", parts_box)
+    parts_mode = ttk.Frame(fr)
+    parts_mode_widgets = [
+        ttk.Radiobutton(parts_mode, text="place randomly", variable=v["scene_parts_mode"], value="place"),
+        ttk.Radiobutton(parts_mode, text="keep as in scene", variable=v["scene_parts_mode"], value="keep"),
+    ]
+    for w in parts_mode_widgets:
+        w.pack(side="left", padx=(0, 8))
+    row(fr, 6, "Scene parts", parts_mode)
     motion = ttk.Frame(fr)
     ttk.Label(motion, text="± azimuth").pack(side="left")
     ttk.Spinbox(motion, from_=0, to=90, increment=1, textvariable=v["camera_azimuth"], width=5).pack(side="left")
     ttk.Label(motion, text="°   ± elevation").pack(side="left")
     ttk.Spinbox(motion, from_=0, to=45, increment=1, textvariable=v["camera_elevation"], width=5).pack(side="left")
     ttk.Label(motion, text="°").pack(side="left")
-    row(fr, 5, "Camera motion", motion)
+    row(fr, 7, "Camera motion", motion)
     lights_cb = ttk.Checkbutton(fr, text="Use only the scene's own lights", variable=v["scene_lights_only"])
-    lights_cb.grid(row=6, column=1, sticky="w")
-    scene_widgets = [scene_entry, scene_btn, camera_box, surface_box, lights_cb] + list(motion.winfo_children())
+    lights_cb.grid(row=8, column=1, sticky="w")
+    scene_widgets = [scene_entry, scene_btn, camera_box, surface_box, parts_box, lights_cb]
+    scene_widgets += list(motion.winfo_children()) + parts_mode_widgets
 
     def update_scene_state():
         on = v["use_scene"].get()
@@ -479,8 +506,15 @@ def main():  # noqa: C901  (UI construction is long but flat)
     def show_scene(info, select_saved):
         cams = [RANDOM_CAMERA] + [f"{c.path}   (at {c.position}, f={c.focal_length:g})" for c in info.cameras]
         surfs = [f"{s.path}   (top {s.top_z:.3f} m, {s.size[0]:.2f} × {s.size[1]:.2f} m)" for s in info.surfaces]
+        groups = [NO_SCENE_PARTS] + [
+            f"{g.path}   ({len(g.children)}: {', '.join(g.children[:4])}{', ...' if len(g.children) > 4 else ''})"
+            for g in info.groups
+        ]
         camera_box.configure(values=cams)
         surface_box.configure(values=surfs)
+        parts_box.configure(values=groups)
+        saved_parts = s0.scene_parts if select_saved else ""
+        v["scene_parts"].set(next((g for g in groups if saved_parts and g.split("   ")[0] == saved_parts), groups[0]))
         saved_cam, saved_surf = s0.scene_camera if select_saved else "", s0.scene_surface if select_saved else ""
         match_cam = next((c for c in cams if saved_cam and c.split("   ")[0] == saved_cam), None)
         v["scene_camera"].set(match_cam or (cams[1] if len(cams) > 1 else cams[0]))

@@ -50,6 +50,8 @@ class Part:
     """Vertices in the part frame [m], shape [N, 3]. The part frame is the CAD file's frame scaled to meters, so
     pose labels refer to the same origin and axes as the CAD model."""
     faces: np.ndarray
+    scene_prim: str | None = None
+    """Stage path of the prim when the part comes from the USD scene (``scene.scene_parts``) instead of a file."""
     bbox_min: np.ndarray = field(init=False)
     bbox_max: np.ndarray = field(init=False)
 

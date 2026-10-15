@@ -1,7 +1,10 @@
 #usda 1.0
 (
     defaultPrim = "Cell"
+    endTimeCode = 240
     metersPerUnit = 0.01
+    startTimeCode = 0
+    timeCodesPerSecond = 24
     upAxis = "Y"
 )
 
@@ -79,6 +82,69 @@ def Xform "Cell"
             float3 xformOp:scale = (5, 88, 5)
             double3 xformOp:translate = (65, 44, 35)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        }
+    }
+
+    def "Conveyor"
+    {
+        def Cube "Frame"
+        {
+            color3f[] primvars:displayColor = [(0.45, 0.46, 0.48)]
+            double size = 1
+            float3 xformOp:scale = (120, 1, 16)
+            double3 xformOp:translate = (0, 93, -25)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        }
+
+        def Cube "Belt"
+        {
+            color3f[] primvars:displayColor = [(0.08, 0.08, 0.09)]
+            double size = 1
+            float3 xformOp:scale = (116, 1, 12)
+            double3 xformOp:translate = (0, 94, -25)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        }
+    }
+
+    def "Parts"
+    {
+        def Cylinder "Bolt_01"
+        {
+            uniform token axis = "Y"
+            double height = 6
+            color3f[] primvars:displayColor = [(0.7, 0.7, 0.72)]
+            double radius = 1.2
+            double3 xformOp:translate = (-22, 95.5, 12)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+        }
+
+        def Cylinder "Bolt_02"
+        {
+            uniform token axis = "X"
+            double height = 6
+            color3f[] primvars:displayColor = [(0.7, 0.7, 0.72)]
+            double radius = 1.2
+            double3 xformOp:translate = (-5, 93.7, 18)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+        }
+
+        def Cube "Block_01"
+        {
+            color3f[] primvars:displayColor = [(0.85, 0.45, 0.1)]
+            double size = 4
+            double3 xformOp:translate = (18, 94.5, 10)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+        }
+
+        def Cube "Block_02"
+        {
+            color3f[] primvars:displayColor = [(0.85, 0.45, 0.1)]
+            double size = 4
+            double3 xformOp:translate.timeSamples = {
+                0: (-50, 96.5, -25),
+                240: (50, 96.5, -25),
+            }
+            uniform token[] xformOpOrder = ["xformOp:translate"]
         }
     }
 

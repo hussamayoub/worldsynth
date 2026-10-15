@@ -49,9 +49,11 @@ scripts/gui.sh              # --preview: render a preview of the saved setup rig
 
 **Pipeline tab**
 
-- **Parts:** the CAD/STL folder, units, and whether a class is a file or a folder.
+- **Parts:** the CAD/STL folder (optional when the scene provides the parts), units, and whether a class is a file
+  or a folder.
 - **Scene:** the built-in workcell, or a predesigned USD scene. After opening a scene, pick a **camera** from it
-  (or random cameras around the parts) and the **surface** to place the parts on, set how far the camera moves over
+  (or random cameras around the parts), the **surface** to place the parts on, optionally the **parts in the scene**
+  (a prim whose children are parts; *place randomly* or *keep as in scene*), set how far the camera moves over
   a clip, and whether to use only the scene's own lights (default; added lights tend to wash a lit scene out, and
   Cosmos then invents objects in the blank areas).
 - **Output:** the run name, the **dataset folder** (where Isaac Sim writes; empty: `output/<name>`) and the
@@ -114,6 +116,7 @@ scripts/run_pipeline.sh --cad assets/lego --name lego_480 --clips 1 --res 480 --
 | `--units mm\|m\|cm\|inch\|auto`, `--class-from file\|folder` | CAD units (default auto), class per file or folder |
 | `--scene USD`, `--scene-surface PRIM` | Predesigned scene and the prim to place parts on |
 | `--scene-camera PRIM`, `--scene-lights-only` | Render from a scene camera; light with the scene's lights only |
+| `--scene-parts PRIM`, `--scene-parts-mode place\|keep` | Children of PRIM are labelled parts of the scene (see below); `--cad` becomes optional |
 | `--spark USER@HOST` | Cosmos machine (default `h@100.123.185.58`) |
 | `--set KEY=VALUE` | Any config override, repeatable |
 | `--skip-sim`, `--skip-cosmos` | Only the Cosmos part (reuse the dataset), or only the dataset |
@@ -160,7 +163,35 @@ scripts/run_pipeline.sh --cad assets/lego --units mm --name scene_001 --clips 20
 ```
 
 Prim paths are the paths inside the scene file, as the GUI lists them. The surface is used as an axis-aligned box, so
-a strongly rotated table gives a placement area that overhangs it.
+a strongly rotated table gives a placement area that overhangs it. With a scene camera, parts are only placed where
+the camera sees the surface (`scene.placement_in_view`).
+
+### Parts that are in the scene
+
+Your scene can bring its own parts: put them under one prim (e.g. `/Cell/Parts`) and select it as **Parts in scene**
+(`--scene-parts /Cell/Parts`). Every child of that prim is one labelled part; its class is its semantic `class` label
+if it has one, else its name without a trailing number (`Bolt_01`, `Bolt_02` -> `Bolt`). Everything else in the scene
+stays as it is. Two modes:
+
+- **place randomly** (`--scene-parts-mode place`): each clip shows a random subset (`parts per clip`) at random
+  stable poses on the surface, like CAD parts; the other scene parts are hidden.
+- **keep as in scene** (`keep`): all scene parts stay where the scene puts them, including animation (e.g. parts
+  riding a conveyor). They are labelled in every frame where they are in that frame, and get random materials.
+  CAD parts, if a CAD folder is set too, are placed around them.
+
+CAD parts and scene parts can be mixed. `assets/scenes/example_cell.usda` has `/Cell/Parts` with two bolts, a block,
+and `Block_02` riding a conveyor:
+
+```bash
+scripts/run_pipeline.sh --name scene_parts_001 --clips 10 \
+  --scene assets/scenes/example_cell.usda --scene-surface /Cell/Workbench/Top \
+  --scene-camera /Cell/Cameras/BenchCam --scene-lights-only \
+  --scene-parts /Cell/Parts --scene-parts-mode keep \
+  --set "camera.azimuth_sweep=[-8,8]" --set "camera.elevation_sweep=[0,0]" --set "camera.distance_sweep=[0,0]"
+```
+
+Animated parts move with the stage time: the timeline advances by one step per rendered frame and keeps running
+across clips, so an animation that ends leaves its parts at their last position.
 
 ## CAD input
 
@@ -274,7 +305,8 @@ scripts/make_example_scene.py  writes assets/scenes/example_cell.usda
 src/worldsynth/                cad (load/convert), scene + scene_info (USD), randomize, generate (render loop),
                                writer + labels (outputs, COCO), cosmos, viz, gui, config
 assets/lego/                   8 LEGO car pieces as USD (millimeters), the parts of the test runs
-assets/scenes/example_cell.usda  example scene (centimeters, y up): workbench, machine, two cameras
+assets/scenes/example_cell.usda  example scene (centimeters, y up): workbench, conveyor, machine, two cameras,
+                               own parts under /Cell/Parts (one animated on the conveyor)
 tests/                         pure-Python tests (no Isaac Sim needed)
 ```
 

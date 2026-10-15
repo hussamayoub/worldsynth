@@ -110,3 +110,14 @@ def test_preview_command(tmp_path):
     assert "dataset.frames_per_clip=1" in cmd and "dataset.resolution=[1248, 720]" in cmd
     assert f"output.dir={tmp_path / 'prev'}" in cmd
     assert "scene.scene_surface=/Cell/Workbench/Top" in cmd and not any("scene_camera" in c for c in cmd)
+
+
+def test_scene_parts_make_cad_folder_optional(tmp_path):
+    s = _settings(tmp_path, cad_dir="", use_scene=True, scene_surface="/Cell/Workbench/Top",
+                  scene_parts="/Cell/Parts", scene_parts_mode="keep")  # fmt: skip
+    assert gui.validate(s) == []
+    cmd = gui.pipeline_command(s, tmp_path / "c.yaml", tmp_path)
+    assert "--cad" not in cmd and " ".join(cmd).count("--scene-parts /Cell/Parts --scene-parts-mode keep") == 1
+    keys = gui.pipeline_keys(s, tmp_path)
+    assert keys["cad.dir"] == "null" and keys["scene.scene_parts_mode"] == "keep"
+    assert gui.validate(_settings(tmp_path, cad_dir=""))  # no CAD folder and no scene parts

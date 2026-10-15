@@ -5,7 +5,7 @@
 #   scripts/run_pipeline.sh --cad /path/to/stl_folder --name run_001 [options]
 #
 # Options:
-#   --cad DIR          folder with CAD/STL files (required unless --skip-sim)
+#   --cad DIR          folder with CAD/STL files (required unless --skip-sim or --scene-parts)
 #   --name NAME        run name (required); names the Cosmos jobs and the default folders below
 #   --config YAML      base config (default configs/default.yaml); the options here override it
 #   --dataset-dir DIR  where Isaac Sim writes the dataset (default output/NAME)
@@ -24,6 +24,9 @@
 #   --scene USD        predesigned USD scene instead of the built-in workcell (needs --scene-surface)
 #   --scene-surface P  prim path in the scene to place the parts on (top of its bounding box)
 #   --scene-camera P   camera prim path in the scene to render from (moves by the camera.*_sweep ranges)
+#   --scene-parts P    prim path in the scene whose children are labelled parts (class = name without number)
+#   --scene-parts-mode place|keep  place: random subset at random poses on the surface (default);
+#                      keep: parts stay where the scene puts/animates them (still labelled, random materials)
 #   --scene-lights-only  light the scene with its own lights only (no added randomized lights)
 #   --spark USER@HOST  Cosmos machine (default $SPARK or h@100.123.185.58)
 #   --skip-sim         reuse the dataset already in the dataset folder (only the Cosmos part)
@@ -46,7 +49,7 @@ WS_SSH_CONTROL=${WS_SSH_CONTROL:-$HOME/.ssh/ws-%C}
 
 CAD="" NAME="" CLIPS=20 FRAMES=61 RES=256 STEPS=50 LOOKS=1 CLUTTER=true UNITS=auto CLASS_FROM=file
 SKIP_SIM=false SKIP_COSMOS=false EXTRA=() PROMPTS=() NEGATIVE=$ROOT/configs/cosmos/negative_prompt.json
-SCENE_ARGS=() CONFIG=$ROOT/configs/default.yaml DATASET="" BATCH=""
+SCENE_ARGS=() SCENE_PARTS="" CONFIG=$ROOT/configs/default.yaml DATASET="" BATCH=""
 while [[ $# -gt 0 ]]; do
   case $1 in
     --cad) CAD=$(realpath "$2"); shift 2 ;;
@@ -68,6 +71,8 @@ while [[ $# -gt 0 ]]; do
     --scene-surface) SCENE_ARGS+=("scene.scene_surface=$2"); shift 2 ;;
     --scene-camera) SCENE_ARGS+=("scene.scene_camera=$2"); shift 2 ;;
     --scene-lights-only) SCENE_ARGS+=("scene.scene_lights_only=true"); shift ;;
+    --scene-parts) SCENE_ARGS+=("scene.scene_parts=$2"); SCENE_PARTS=$2; shift 2 ;;
+    --scene-parts-mode) SCENE_ARGS+=("scene.scene_parts_mode=$2"); shift 2 ;;
     --spark) SPARK=$2; shift 2 ;;
     --skip-sim) SKIP_SIM=true; shift ;;
     --skip-cosmos) SKIP_COSMOS=true; shift ;;
@@ -97,10 +102,16 @@ step() { echo; echo "=== $(date +%T) $*"; }
 
 # 1. render the dataset ------------------------------------------------------------------------------------------------
 if ! $SKIP_SIM; then
-  [[ -d $CAD ]] || { echo "--cad folder not found: $CAD"; exit 1; }
-  step "1/5 Isaac Sim: $CLIPS clips x $FRAMES frames at ${WIDTH}x720 from $CAD"
+  if [[ -n $CAD ]]; then
+    [[ -d $CAD ]] || { echo "--cad folder not found: $CAD"; exit 1; }
+    CAD_ARG="cad.dir=$CAD"
+  else
+    [[ -n $SCENE_PARTS ]] || { echo "--cad is required (or --scene-parts)"; exit 1; }
+    CAD_ARG="cad.dir=null"
+  fi
+  step "1/5 Isaac Sim: $CLIPS clips x $FRAMES frames at ${WIDTH}x720 from ${CAD:-the scene parts}"
   (cd "$ISAACLAB_DIR" && "$PY" "$ROOT/scripts/generate.py" --config "$CONFIG" \
-    "cad.dir=$CAD" "cad.cache_dir=$ROOT/cache/usd" "cad.units=$UNITS" "cad.class_from=$CLASS_FROM" \
+    "$CAD_ARG" "cad.cache_dir=$ROOT/cache/usd" "cad.units=$UNITS" "cad.class_from=$CLASS_FROM" \
     "output.dir=$DATASET" "dataset.num_clips=$CLIPS" "dataset.frames_per_clip=$FRAMES" \
     "dataset.resolution=[$WIDTH,720]" "randomization.clutter.enabled=$CLUTTER" "${SCENE_ARGS[@]}" "${EXTRA[@]}" 2>&1 \
     | grep --line-buffered -E '^\[worldsynth\]|Error|Traceback|^ +File|Exception' ) || true

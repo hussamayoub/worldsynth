@@ -20,8 +20,9 @@ IntRange = tuple[int, int]
 
 @dataclass
 class CadCfg:
-    dir: str = "cad"
-    """Folder that is searched (recursively) for CAD and mesh files."""
+    dir: str | None = "cad"
+    """Folder that is searched (recursively) for CAD and mesh files. Optional when ``scene.scene_parts`` provides
+    the parts."""
     cache_dir: str = "cache/usd"
     """Where converted USD files are stored. Conversions are reused while the source file is unchanged."""
     units: str = "auto"
@@ -87,6 +88,15 @@ class SceneCfg:
     scene_camera: str | None = None
     """Camera prim path (as in the scene file) to render from. Its pose, focal length and aperture are used; the
     ``camera.*_sweep`` ranges move it around the point it looks at. Without it, cameras are sampled as usual."""
+    scene_parts: str | None = None
+    """Prim path (as in the scene file) whose children are labelled parts of the scene. Each child is one part; its
+    class is its semantic ``class`` label or its name without a trailing number (``Bolt_01`` -> ``Bolt``)."""
+    scene_parts_mode: str = "place"
+    """``place``: each clip shows a random subset of the scene parts at random stable poses on ``scene_surface``
+    (the others are hidden), like CAD parts. ``keep``: all scene parts stay where (and how) the scene moves them,
+    e.g. on an animated conveyor; they still get labels and random materials."""
+    placement_in_view: bool = True
+    """With a scene camera, place parts (and clutter) only on the part of the surface the camera sees."""
     scene_lights_only: bool = False
     """True: light the scene with its own lights only. False: also add the randomized dome and area lights."""
     table: TableCfg = field(default_factory=TableCfg)
@@ -229,7 +239,7 @@ def load_config(path: str | Path | None, overrides: list[str] | None = None) -> 
             node = node.setdefault(p, {})
         node[leaf] = yaml.safe_load(value)
     cfg = _build(WorldSynthCfg, data)
-    cfg.cad.dir = _resolve(base, cfg.cad.dir)
+    cfg.cad.dir = _resolve(base, cfg.cad.dir) if cfg.cad.dir else None
     cfg.cad.cache_dir = _resolve(base, cfg.cad.cache_dir)
     cfg.output.dir = _resolve(base, cfg.output.dir)
     if cfg.scene.scene_usd:

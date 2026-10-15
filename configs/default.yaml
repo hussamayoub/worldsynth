@@ -5,6 +5,7 @@
 
 cad:
   dir: cad                    # folder searched recursively: STEP/IGES/SolidWorks/... (HOOPS), OBJ/STL/FBX/glTF, USD
+                              # (optional with scene.scene_parts)
   cache_dir: cache/usd        # converted USD files; reused while the source file is unchanged
   units: auto                 # auto | m | cm | mm | inch  (auto: file metadata; parts > 2 m are assumed to be in mm)
   class_from: file            # file: class = file name | folder: class = parent folder (several files per class)
@@ -36,6 +37,9 @@ scene:
   scene_surface: null         # prim path in that scene the parts are placed on (top of its bounding box)
   surface_margin: 0.03        # keep parts this far from the surface edge
   scene_camera: null          # camera prim path in the scene to render from (else cameras are sampled)
+  scene_parts: null           # prim path in the scene whose children are labelled parts (class = name without number)
+  scene_parts_mode: place     # place: random subset at random poses on the surface; keep: scene poses/animation
+  placement_in_view: true     # with a scene camera: place parts only where the camera sees the surface
   scene_lights_only: false    # true: only the scene's own lights; false: also add randomized lights
   table:
     size: [1.2, 0.8, 0.75]    # table top x, y and height

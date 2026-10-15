@@ -32,20 +32,26 @@ class PartEntry:
     """Simplified (vertices, faces) for the visibility computation."""
 
 
-def load_parts(cfg: WorldSynthCfg) -> tuple[list[PartEntry], list[dict]]:
-    """Discover, convert and load all CAD parts; return them with the category table."""
-    files = cad.discover(cfg.cad.dir, cfg.cad.class_from)
-    usd_files = cad.convert_all(files, cfg.cad.cache_dir, cfg.cad.tessellation_lod)
+def load_parts(cfg: WorldSynthCfg, scene_parts: list | None = None) -> tuple[list[PartEntry], list[dict]]:
+    """Load the CAD parts (if a CAD folder is set) and the scene's parts; return them with the category table."""
     loaded = []
-    for f in files:
-        if f.path not in usd_files:
-            continue
-        try:
-            loaded.append(cad.load_part(f, usd_files[f.path], cfg.cad.units))
-        except Exception as e:
-            logger.error("Skipping %s: %s", f.path, e)
+    if cfg.cad.dir or not scene_parts:
+        files = cad.discover(cfg.cad.dir or "", cfg.cad.class_from)
+        usd_files = cad.convert_all(files, cfg.cad.cache_dir, cfg.cad.tessellation_lod)
+        for f in files:
+            if f.path not in usd_files:
+                continue
+            try:
+                loaded.append(cad.load_part(f, usd_files[f.path], cfg.cad.units))
+            except Exception as e:
+                logger.error("Skipping %s: %s", f.path, e)
+    for sp in scene_parts or []:
+        scene_file = Path(cfg.scene.scene_usd or "")
+        loaded.append(
+            cad.Part(sp.name, sp.category, scene_file, scene_file, sp.path, 1.0, sp.vertices, sp.faces, sp.path)
+        )
     if not loaded:
-        raise RuntimeError("No CAD part could be loaded.")
+        raise RuntimeError("No part could be loaded (CAD folder or scene.scene_parts).")
     names = sorted({p.category for p in loaded})
     categories = [{"id": i + 1, "name": n} for i, n in enumerate(names)]
     class_ids = {c["name"]: c["id"] for c in categories}
@@ -118,10 +124,20 @@ def sample_clip(
     rng: np.random.Generator, cfg: WorldSynthCfg, entries: list[PartEntry], scene: WorkcellScene, clip_idx: int
 ) -> dict:
     """Sample everything that defines one clip (pure data, applied to the stage by :func:`build_clip`)."""
+    keep = cfg.scene.scene_parts_mode == "keep"
+    if cfg.scene.scene_parts_mode not in ("place", "keep"):
+        raise ValueError(f"scene.scene_parts_mode must be place or keep, got {cfg.scene.scene_parts_mode!r}")
+    # scene parts exist once each; CAD parts can appear up to max_instances_per_class times
+    pool = []
+    for i, e in enumerate(entries):
+        if e.part.scene_prim is None:
+            pool += [i] * cfg.scene.max_instances_per_class
+        elif not keep:
+            pool.append(i)
     n = R.randint(rng, cfg.scene.parts_per_clip)
     per_class: dict[int, int] = {}
     chosen = []
-    for idx in rng.permutation(np.repeat(np.arange(len(entries)), cfg.scene.max_instances_per_class)):
+    for idx in rng.permutation(np.asarray(pool, dtype=int)):
         e = entries[idx]
         if len(chosen) >= n or per_class.get(e.class_id, 0) >= cfg.scene.max_instances_per_class:
             continue
@@ -132,7 +148,13 @@ def sample_clip(
         e = entries[idx]
         rot = e.rotations[rng.choice(len(e.rotations), p=e.probs)]
         footprints.append(R.footprint(e.part.vertices, rot))
+    # kept scene parts stay where they are; new parts and clutter avoid them
+    kept = [i for i, e in enumerate(entries) if keep and e.part.scene_prim is not None]
     occupied: list[tuple[np.ndarray, float]] = []
+    for i in kept:
+        sp = scene.scene_part(entries[i].part.scene_prim)
+        fp = R.footprint(sp.vertices, sp.pose[:3, :3])
+        occupied.append((sp.pose[:2, 3] + fp.center_xy, fp.radius))
     poses = R.place_on_table(
         rng, footprints, scene.placement_area, scene.table_z, cfg.scene.min_spacing, occupied=occupied
     )
@@ -141,6 +163,8 @@ def sample_clip(
         for idx, pose in zip(chosen, poses, strict=True)
         if pose is not None
     ]
+    parts += [{"entry": i, "pose": None, "material": R.sample_part_material(rng, cfg.randomization.part_material)}
+              for i in kept]  # fmt: skip
 
     # clutter goes around and between the parts: the placement area plus a margin, on the table or surface
     m = cfg.randomization.clutter.margin
@@ -179,10 +203,16 @@ def build_clip(scene: WorkcellScene, clip: dict, entries: list[PartEntry]) -> tu
     scene.clear_clip()
     scene.apply_lights(clip["lights"])
     scene.apply_surfaces(clip["surfaces"])
+    scene.show_scene_parts({entries[p["entry"]].part.scene_prim for p in clip["parts"]})
     objects = []
     for i, p in enumerate(clip["parts"]):
         e = entries[p["entry"]]
-        path = scene.add_part(i, e.part, p["pose"], p["material"])
+        if e.part.scene_prim is not None:
+            path = scene.pose_scene_part(e.part.scene_prim, p["pose"], p["material"])
+            if p["pose"] is None:
+                p["pose"] = scene.scene_part_pose(path)
+        else:
+            path = scene.add_part(i, e.part, p["pose"], p["material"])
         objects.append(
             SceneObject(
                 instance_id=i + 1,
@@ -234,7 +264,10 @@ def run(cfg: WorldSynthCfg):
         shutil.rmtree(out)
     out.mkdir(parents=True, exist_ok=True)
 
-    entries, categories = load_parts(cfg)
+    omni.usd.get_context().new_stage()
+    stage = omni.usd.get_context().get_stage()
+    scene = WorkcellScene(stage, cfg)
+    entries, categories = load_parts(cfg, scene.scene_parts)
     meta = {
         "name": out.name,
         "generator": "worldsynth",
@@ -245,7 +278,7 @@ def run(cfg: WorldSynthCfg):
                 "name": e.part.name,
                 "class": e.part.category,
                 "class_id": e.class_id,
-                "source": str(e.part.source),
+                "source": str(e.part.source) + (f"#{e.part.scene_prim}" if e.part.scene_prim else ""),
                 "usd": str(e.part.usd_path),
                 "scale_to_m": e.part.scale,
                 "bbox_min": e.part.bbox_min.tolist(),
@@ -271,12 +304,10 @@ def run(cfg: WorldSynthCfg):
         raise RuntimeError(f"{out} holds a dataset with other categories; use a new output.dir or output.overwrite")
     meta_path.write_text(json.dumps(meta, indent=2))
 
-    omni.usd.get_context().new_stage()
-    stage = omni.usd.get_context().get_stage()
-    scene = WorkcellScene(stage, cfg)
     width, height = cfg.dataset.resolution
     capture = Capture(cfg.dataset)
     writer = FrameWriter()
+    scene_part_paths = {sp.path for sp in scene.scene_parts}
     ds = cfg.dataset
     t_start = time.time()
     generated = 0
@@ -289,6 +320,7 @@ def run(cfg: WorldSynthCfg):
             shutil.rmtree(clip_dir)  # unfinished clip from an interrupted run
         rng = np.random.default_rng([cfg.output.seed, clip_idx])
         clip = sample_clip(rng, cfg, entries, scene, clip_idx)
+        kept_paths = {entries[p["entry"]].part.scene_prim for p in clip["parts"] if p["pose"] is None}
         objects, background = build_clip(scene, clip, entries)
         if scene.scene_camera is not None:
             t0, focal, _ = scene.scene_camera
@@ -301,10 +333,15 @@ def run(cfg: WorldSynthCfg):
         scene.set_camera(traj.transforms[0], traj.focal_length)
         for _ in range(ds.warmup_frames):
             capture.step(ds.rt_subframes)
+        moving = [o for o in objects if o.prim_path in scene_part_paths and o.prim_path in kept_paths]
         for f, t_cam in enumerate(traj.transforms):
             scene.set_camera(t_cam, traj.focal_length)
             capture.step(ds.rt_subframes)
             data = capture.get()
+            if moving:  # kept scene parts may be animated: label them where they are in this frame
+                tc = scene.current_time_code()
+                for o in moving:
+                    o.T_world_obj = scene.scene_part_pose(o.prim_path, tc)
             writer.write(
                 clip_dir,
                 f,

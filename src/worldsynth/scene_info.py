@@ -6,6 +6,7 @@ All positions and sizes are reported in WorldSynth's frame: meters, z up. The sc
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -35,6 +36,13 @@ class SurfaceInfo:
 
 
 @dataclass
+class GroupInfo:
+    path: str
+    children: list[str]
+    """Names of the child prims (the candidate parts)."""
+
+
+@dataclass
 class SceneInfo:
     path: str
     root_prim: str
@@ -43,6 +51,22 @@ class SceneInfo:
     up_axis: str
     cameras: list[CameraInfo] = field(default_factory=list)
     surfaces: list[SurfaceInfo] = field(default_factory=list)
+    groups: list[GroupInfo] = field(default_factory=list)
+    """Prims with child prims, candidates for ``scene.scene_parts``."""
+
+
+def part_class_name(prim_name: str) -> str:
+    """Class of a scene part from its prim name: a trailing number is dropped (``Bolt_01`` -> ``Bolt``)."""
+    return re.sub(r"[_\-.\s]*\d+$", "", prim_name) or prim_name
+
+
+def is_geometry_group(prim) -> bool:
+    """Prims that can be parts or hold parts: geometry, transforms and untyped groups (not cameras or lights)."""
+    from pxr import UsdGeom, UsdLux
+
+    if prim.IsA(UsdGeom.Camera) or prim.HasAPI(UsdLux.LightAPI) or prim.IsA(UsdGeom.Subset):
+        return False
+    return prim.IsA(UsdGeom.Imageable) or not prim.GetTypeName()
 
 
 def correction(meters_per_unit: float, up_axis: str) -> np.ndarray:
@@ -120,5 +144,11 @@ def inspect(path: str) -> SceneInfo:
                     size=np.round(size, 3).tolist(),
                 )
             )
+    for prim in Usd.PrimRange(root):
+        if prim == root or not is_geometry_group(prim):
+            continue
+        kids = [c.GetName() for c in prim.GetChildren() if is_geometry_group(c)]
+        if kids and not prim.IsA(UsdGeom.Gprim):
+            info.groups.append(GroupInfo(path=str(prim.GetPath()), children=kids))
     info.surfaces.sort(key=lambda s: -s.size[0] * s.size[1])
     return info

@@ -307,6 +307,31 @@ def look_target(t_cam: np.ndarray, plane_z: float, fallback_distance: float = 1.
     return eye + fallback_distance * forward
 
 
+def view_footprint(
+    t_cam: np.ndarray,
+    focal_length: float,
+    horizontal_aperture: float,
+    aspect: float,
+    plane_z: float,
+    fill: float = 0.8,
+    max_distance: float = 3.0,
+) -> tuple[tuple[float, float], tuple[float, float]]:
+    """xy bounding box of the part of the plane ``z = plane_z`` a USD camera sees, using the central ``fill``
+    fraction of the image; rays that miss the plane count up to ``max_distance`` [m]."""
+    half_w = fill * horizontal_aperture / (2 * focal_length)
+    half_h = half_w / aspect
+    eye = t_cam[:3, 3]
+    pts = []
+    for x in (-half_w, half_w):
+        for y in (-half_h, half_h):
+            d = t_cam[:3, :3] @ np.array([x, y, -1.0])
+            t = (plane_z - eye[2]) / d[2] if d[2] < -1e-6 else np.inf
+            t = min(t, max_distance / np.linalg.norm(d)) if t > 0 else max_distance / np.linalg.norm(d)
+            pts.append(eye + t * d)
+    pts = np.array(pts)
+    return (float(pts[:, 0].min()), float(pts[:, 0].max())), (float(pts[:, 1].min()), float(pts[:, 1].max()))
+
+
 def orbit_trajectory(
     t0: np.ndarray, target, num_frames: int, azimuth: float, elevation: float, distance: float
 ) -> list[np.ndarray]:

@@ -108,3 +108,10 @@ def test_orbit_trajectory_starts_at_scene_camera_and_orbits_target():
 def test_look_target_without_hit_is_in_front_of_camera():
     t = R.look_at([0, 0, 1], [1, 0, 1.5])  # looking up: never hits the plane below
     np.testing.assert_allclose(R.look_target(t, 0.0), t[:3, 3] - t[:3, 2], atol=1e-12)
+
+
+def test_view_footprint_of_downward_camera():
+    t = R.look_at([0.0, 0.0, 1.0], [0.0, 0.0, 0.0], up=(0.0, 1.0, 0.0))  # 1 m above the plane, looking down
+    (x0, x1), (y0, y1) = R.view_footprint(t, 20.0, 20.0, 2.0, 0.0, fill=1.0)
+    # horizontal field: aperture / focal = 1 -> 1 m wide at 1 m; aspect 2 -> 0.5 m tall
+    assert (x0, x1) == pytest.approx((-0.5, 0.5)) and (y0, y1) == pytest.approx((-0.25, 0.25))

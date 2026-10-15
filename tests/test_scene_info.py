@@ -42,3 +42,11 @@ def test_stage_path_and_correction():
     np.testing.assert_allclose(t[:3, :3] @ [0, 100, 0], [0, 0, 1.0], atol=1e-12)  # 1 m up
     rot = si.orthonormal(t)[:3, :3]
     np.testing.assert_allclose(rot.T @ rot, np.eye(3), atol=1e-12)
+
+
+def test_scene_parts_groups_and_class_names(example_scene):
+    groups = {g.path: g.children for g in si.inspect(example_scene).groups}
+    assert groups["/Cell/Parts"] == ["Bolt_01", "Bolt_02", "Block_01", "Block_02"]
+    assert "/Cell/Cameras" not in groups and "/Cell/Lights" not in groups  # cameras and lights are no parts
+    names = ["Bolt_01", "bolt-2", "Gear.12", "Housing", "Plate 3", "007"]
+    assert [si.part_class_name(n) for n in names] == ["Bolt", "bolt", "Gear", "Housing", "Plate", "007"]

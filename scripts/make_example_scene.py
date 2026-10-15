@@ -3,8 +3,10 @@
     python scripts/make_example_scene.py assets/scenes/example_cell.usda
 
 The scene is in centimeters with y up (as many exported scenes are), so it also exercises the unit and axis
-conversion. It has a workbench (place parts on ``/Cell/Workbench/Top``), a machine, walls, a ceiling light and two
-cameras: ``/Cell/Cameras/BenchCam`` (close, looking down at the bench) and ``/Cell/Cameras/Overview``.
+conversion. It has a workbench (place parts on ``/Cell/Workbench/Top``), a small conveyor on the bench, a machine,
+walls, a ceiling light and two cameras: ``/Cell/Cameras/BenchCam`` (close, looking down at the bench) and
+``/Cell/Cameras/Overview``. ``/Cell/Parts`` holds parts of the scene itself (for ``scene.scene_parts``): two bolts,
+a block on the bench and ``Block_02``, which rides along the conveyor (animated over 10 s).
 """
 
 import argparse
@@ -56,6 +58,31 @@ def main():
     box(stage, "/Cell/Workbench/Top", (0, 90, 0), (140, 5, 80), (0.22, 0.23, 0.25))
     for i, (x, z) in enumerate([(-65, -35), (65, -35), (-65, 35), (65, 35)]):
         box(stage, f"/Cell/Workbench/Leg_{i}", (x, 44, z), (5, 88, 5), (0.5, 0.5, 0.52))
+    # conveyor on the back of the bench: belt top at 94.5 cm
+    box(stage, "/Cell/Conveyor/Frame", (0, 93.0, -25), (120, 1, 16), (0.45, 0.46, 0.48))
+    box(stage, "/Cell/Conveyor/Belt", (0, 94.0, -25), (116, 1, 12), (0.08, 0.08, 0.09))
+    # parts of the scene itself
+    for name, axis, center in [("Bolt_01", "Y", (-22, 95.5, 12)), ("Bolt_02", "X", (-5, 93.7, 18))]:
+        bolt = UsdGeom.Cylinder.Define(stage, f"/Cell/Parts/{name}")
+        bolt.CreateRadiusAttr(1.2)
+        bolt.CreateHeightAttr(6.0)
+        bolt.CreateAxisAttr(axis)
+        bolt.CreateDisplayColorAttr([Gf.Vec3f(0.7, 0.7, 0.72)])
+        UsdGeom.Xformable(bolt).AddTranslateOp().Set(Gf.Vec3d(*center))
+    for name, center in [("Block_01", (18, 94.5, 10)), ("Block_02", (-50, 96.5, -25))]:
+        block = UsdGeom.Cube.Define(stage, f"/Cell/Parts/{name}")
+        block.CreateSizeAttr(4.0)
+        block.CreateDisplayColorAttr([Gf.Vec3f(0.85, 0.45, 0.1)])
+        op = UsdGeom.Xformable(block).AddTranslateOp()
+        if name == "Block_02":  # rides the conveyor from x = -50 to 50 cm in 10 s
+            op.Set(Gf.Vec3d(-50, 96.5, -25), 0)
+            op.Set(Gf.Vec3d(50, 96.5, -25), 240)
+        else:
+            op.Set(Gf.Vec3d(*center))
+    stage.SetStartTimeCode(0)
+    stage.SetEndTimeCode(240)
+    stage.SetTimeCodesPerSecond(24)
+
     # machine next to the bench
     box(stage, "/Cell/Machine/Body", (-160, 100, -60), (120, 200, 100), (0.82, 0.83, 0.80))
     box(stage, "/Cell/Machine/Door", (-160, 110, -9), (70, 80, 2), (0.25, 0.35, 0.45))
