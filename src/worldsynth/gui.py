@@ -952,7 +952,148 @@ def main():  # noqa: C901  (UI construction is long but flat)
                 if state["prompt_shown"].get(text) != prompt_widgets[text][0].get():
                     show_prompt(text)
 
-    notebook.bind("<<NotebookTabChanged>>", on_tab)
+    # --- videos tab ------------------------------------------------------------------------------------------------
+    from . import videos as vid
+
+    vid_tab = ttk.Frame(notebook, padding=6)
+    notebook.add(vid_tab, text="Videos")
+    vf = ttk.Frame(vid_tab)
+    vf.pack(fill="x")
+    vf.columnconfigure(1, weight=1)
+    vid_data = tk.StringVar()
+    vid_cosmos = tk.StringVar()
+    for r, (label, var) in enumerate([("Dataset", vid_data), ("Cosmos folder", vid_cosmos)]):
+        ttk.Label(vf, text=label).grid(row=r, column=0, sticky="w", padx=(0, 6), pady=2)
+        ttk.Entry(vf, textvariable=var, width=34).grid(row=r, column=1, sticky="ew", pady=2)
+        ttk.Button(vf, text="Browse...", command=lambda var=var: (browse_dir(var), refresh_videos())).grid(
+            row=r, column=2, padx=(4, 0)
+        )
+    vb = ttk.Frame(vid_tab)
+    vb.pack(fill="x", pady=4)
+    ttk.Button(vb, text="Use the run's folders", command=lambda: use_run_folders()).pack(side="left")
+    ttk.Button(vb, text="Refresh", command=lambda: refresh_videos()).pack(side="left", padx=6)
+    vid_box = ttk.Frame(vid_tab)
+    vid_box.pack(fill="both", expand=True)
+    vid_tree = ttk.Treeview(vid_box, show="tree", height=18)
+    vid_scroll = ttk.Scrollbar(vid_box, orient="vertical", command=vid_tree.yview)
+    vid_tree.configure(yscrollcommand=vid_scroll.set)
+    vid_tree.pack(side="left", fill="both", expand=True)
+    vid_scroll.pack(side="right", fill="y")
+    vo = ttk.Frame(vid_tab)
+    vo.pack(fill="x", pady=(6, 2))
+    ttk.Label(vo, text="View").pack(side="left")
+    vid_view = tk.StringVar(value="video")
+    view_box = ttk.Combobox(vo, textvariable=vid_view, state="readonly", width=14)
+    view_box.pack(side="left", padx=(4, 12))
+    ttk.Label(vo, text="Speed").pack(side="left")
+    vid_speed = tk.StringVar(value="1x")
+    ttk.Combobox(vo, textvariable=vid_speed, values=["0.25x", "0.5x", "1x", "2x"], state="readonly",
+                 width=6).pack(side="left", padx=4)  # fmt: skip
+    vc = ttk.Frame(vid_tab)
+    vc.pack(fill="x", pady=2)
+    ttk.Button(vc, text="<", width=3, command=lambda: step_video(-1)).pack(side="left")
+    play_btn = ttk.Button(vc, text="Play", width=6, command=lambda: toggle_play())
+    play_btn.pack(side="left", padx=4)
+    ttk.Button(vc, text=">", width=3, command=lambda: step_video(1)).pack(side="left")
+    vid_pos = tk.IntVar(value=0)
+    vid_slider = ttk.Scale(vc, from_=0, to=0, orient="horizontal", command=lambda x: seek_video(int(float(x))))
+    vid_slider.pack(side="left", fill="x", expand=True, padx=6)
+    vid_label = ttk.Label(vc, text="0 / 0", width=10)
+    vid_label.pack(side="left")
+    ttk.Label(vid_tab, foreground="#555", wraplength=530, justify="left", text=(
+        "Isaac Sim clips play from their frames: view them as rgb, with labels, depth, segmentation or instance "
+        "masks. The video plays in the large area on the right."
+    )).pack(fill="x", pady=(4, 0))  # fmt: skip
+    player = {"sources": {}, "src": None, "n": 0, "playing": False, "after": None, "cache": {}}
+
+    def use_run_folders():
+        s = settings()
+        vid_data.set(str(dataset_path(s)))
+        vid_cosmos.set(str(cosmos_path(s)))
+        refresh_videos()
+
+    def refresh_videos():
+        stop_video()
+        vid_tree.delete(*vid_tree.get_children(""))
+        data = Path(vid_data.get()) if vid_data.get() else None
+        cos = Path(vid_cosmos.get()) if vid_cosmos.get() else None
+        sources = vid.find_sources(data, cos)
+        player["sources"] = {src.key: src for src in sources}
+        for src in sources:
+            if not vid_tree.exists(src.group):
+                vid_tree.insert("", "end", iid=src.group, text=src.group, open=True)
+            vid_tree.insert(src.group, "end", iid=src.key, text=src.name)
+        if not sources:
+            vid_tree.insert("", "end", iid="none", text="no videos found in these folders (yet)")
+        else:  # show the first frame of the first video
+            vid_tree.selection_set(sources[0].key)
+
+    def select_video(_e=None):
+        sel = vid_tree.selection()
+        if not sel or sel[0] not in player["sources"]:
+            return
+        stop_video()
+        src = player["sources"][sel[0]]
+        player.update(src=src, cache={}, n=vid.frame_count(src))
+        view_box.configure(values=list(src.views))
+        if vid_view.get() not in src.views:
+            vid_view.set("rgb + labels" if "rgb + labels" in src.views else src.views[0])
+        vid_slider.configure(to=max(0, player["n"] - 1))
+        seek_video(0)
+
+    def seek_video(i: int):
+        src = player["src"]
+        if src is None or player["n"] == 0:
+            return
+        i = max(0, min(player["n"] - 1, i))
+        vid_pos.set(i)
+        key = (vid_view.get(), i)
+        if key not in player["cache"]:
+            img = vid.read_frame(src, i, vid_view.get())
+            if img is None:
+                return
+            player["cache"] = player["cache"] if len(player["cache"]) < 400 else {}
+            player["cache"][key] = fit_width(img)
+        show_array(player["cache"][key], f"{src.group}: {src.name}   ({vid_view.get()})", fitted=True)
+        vid_label.configure(text=f"{i + 1} / {player['n']}")
+        if abs(vid_slider.get() - i) >= 1:
+            vid_slider.set(i)
+
+    def step_video(d: int):
+        stop_video()
+        seek_video(vid_pos.get() + d)
+
+    def tick():
+        if not player["playing"]:
+            return
+        seek_video((vid_pos.get() + 1) % max(1, player["n"]))
+        fps = player["src"].fps * float(vid_speed.get().rstrip("x"))
+        player["after"] = app.after(max(10, int(1000 / fps)), tick)
+
+    def toggle_play():
+        if player["playing"]:
+            stop_video()
+        elif player["src"] is not None:
+            player["playing"] = True
+            play_btn.configure(text="Pause")
+            tick()
+
+    def stop_video():
+        player["playing"] = False
+        play_btn.configure(text="Play")
+        if player["after"]:
+            app.after_cancel(player["after"])
+            player["after"] = None
+
+    vid_tree.bind("<<TreeviewSelect>>", select_video)
+    view_box.bind("<<ComboboxSelected>>", lambda _e: seek_video(vid_pos.get()))
+
+    def on_tab_all(_e=None):
+        on_tab()
+        if notebook.index("current") == 3 and not vid_data.get():
+            use_run_folders()
+
+    notebook.bind("<<NotebookTabChanged>>", on_tab_all)
 
     # --- right side: buttons, image, log ----------------------------------------------------------------------------
     btns = ttk.Frame(right)
@@ -988,6 +1129,32 @@ def main():  # noqa: C901  (UI construction is long but flat)
         log.see("end")
         log.configure(state="disabled")
 
+    def fit_width(img):
+        """Scale a BGR image to the width of the image area (and at most 62 % of the window height)."""
+        import cv2
+
+        width = max(400, right.winfo_width() - 20)
+        height = round(img.shape[0] * width / img.shape[1])
+        max_h = max(240, int(app.winfo_height() * 0.62))
+        if height > max_h:
+            width, height = round(width * max_h / height), max_h
+        return cv2.resize(img, (width, height), interpolation=cv2.INTER_AREA)
+
+    def show_array(img, text: str, fitted: bool = False):
+        img = img if fitted else fit_width(img)
+        try:
+            from PIL import Image, ImageTk
+
+            photo = ImageTk.PhotoImage(Image.fromarray(img[..., ::-1]))
+        except ImportError:
+            import cv2
+
+            ok, png = cv2.imencode(".png", img)
+            photo = tk.PhotoImage(data=base64.b64encode(png.tobytes()).decode())
+        image_label.configure(image=photo, text="")
+        image_label.image = photo
+        caption.configure(text=text)
+
     def show_image(path: Path, label_file: Path | None, text: str):
         import cv2
 
@@ -999,13 +1166,7 @@ def main():  # noqa: C901  (UI construction is long but flat)
             return
         if label_file is not None and label_file.exists():
             img = draw(img, json.loads(label_file.read_text()))
-        width = max(400, right.winfo_width() - 20)
-        img = cv2.resize(img, (width, round(img.shape[0] * width / img.shape[1])), interpolation=cv2.INTER_AREA)
-        ok, png = cv2.imencode(".png", img)
-        photo = tk.PhotoImage(data=base64.b64encode(png.tobytes()).decode())
-        image_label.configure(image=photo, text="")
-        image_label.image = photo
-        caption.configure(text=text)
+        show_array(img, text)
 
     # --- processes ---------------------------------------------------------------------------------------------------
     def set_busy(busy: bool, what: str = ""):
@@ -1172,6 +1333,8 @@ def main():  # noqa: C901  (UI construction is long but flat)
         app.after(500, lambda: notebook.select(1))
     if "--prompts-tab" in sys.argv[1:]:
         app.after(500, lambda: notebook.select(2))
+    if "--videos-tab" in sys.argv[1:]:
+        app.after(500, lambda: notebook.select(3))
     app.mainloop()
 
 

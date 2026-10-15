@@ -47,7 +47,8 @@ cd ~/research/isaaclab/worldsynth
 scripts/gui.sh              # starts with the default settings; --restore loads the settings of the last run
 ```
 
-The window has three tabs on the left and the run controls on the right. Every start uses the defaults;
+The window has four tabs on the left (Pipeline, Configuration, Prompts, Videos) and the run controls and image area
+on the right. Every start uses the defaults;
 **Restore last session** brings back the settings of the last run (saved in `~/.config/worldsynth/gui.json`,
 `WORLDSYNTH_GUI_SETTINGS` overrides), **Defaults** resets them.
 
@@ -76,6 +77,11 @@ Pipeline tab are grey: the Pipeline tab wins. Selecting a key shows its descript
 **Prompts tab:** the look prompt and the negative prompt as editable text (JSON; `{parts}` becomes your class names).
 Edits are used by the next run even when not saved; **Save** writes them to the file, **Save as...** to a new file
 (new files in `configs/cosmos/` appear in the lists), **Revert** drops the edits.
+
+**Videos tab:** plays the videos of a run in the large image area: the rendered Isaac Sim clips (view as rgb, rgb with
+labels, depth, segmentation or instance masks), the imported Cosmos frames (with or without labels), the side-by-side
+and label-preview videos, the Cosmos input videos (vision, depth, seg) and the raw Cosmos results. It opens on the
+folders of the current run; **Browse...** shows any other dataset or Cosmos folder. Play/Pause, step, slider, speed.
 
 **Run controls:** **Preview frame** renders one labelled frame (Isaac Sim starts, ~30 s) to check camera, surface and
 part size. **Run all steps** runs the whole pipeline; the **steps** can also run one at a time:
@@ -320,7 +326,7 @@ scripts/cosmos_import.py       import Cosmos results into a dataset
 scripts/visualize.py           label previews and side-by-side videos
 scripts/make_example_scene.py  writes assets/scenes/example_cell.usda
 src/worldsynth/                cad (load/convert), scene + scene_info (USD), randomize, generate (render loop),
-                               writer + labels (outputs, COCO), cosmos, viz, gui, config
+                               writer + labels (outputs, COCO), cosmos, viz + videos (viewing), gui, config
 assets/lego/                   8 LEGO car pieces as USD (millimeters), the parts of the test runs
 assets/scenes/example_cell.usda  example scene (centimeters, y up): workbench, conveyor, machine, two cameras,
                                own parts under /Cell/Parts (one animated on the conveyor)
