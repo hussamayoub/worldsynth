@@ -76,6 +76,19 @@ class TableCfg:
 
 @dataclass
 class SceneCfg:
+    scene_usd: str | None = None
+    """Predesigned USD scene used instead of the built-in workcell (table, floor, walls). Its units and up axis are
+    converted to meters and z-up. Parts are placed on ``scene_surface``."""
+    scene_surface: str | None = None
+    """Prim path (as in the scene file) of the surface the parts are placed on; the top of its bounding box, inset by
+    ``surface_margin``, becomes the placement area. Required with ``scene_usd``."""
+    surface_margin: float = 0.03
+    """Distance kept between parts and the edge of ``scene_surface`` [m]."""
+    scene_camera: str | None = None
+    """Camera prim path (as in the scene file) to render from. Its pose, focal length and aperture are used; the
+    ``camera.*_sweep`` ranges move it around the point it looks at. Without it, cameras are sampled as usual."""
+    scene_lights_only: bool = False
+    """True: light the scene with its own lights only. False: also add the randomized dome and area lights."""
     environment_usd: str | None = None
     """Optional USD of the machine tending cell (machine, fixtures, robot). Referenced under ``/World/Environment``."""
     environment_pose: tuple[float, ...] = (0.0, 0.0, 0.0, 0.0)
@@ -123,6 +136,9 @@ class ClutterCfg:
     count: IntRange = (0, 8)
     size: Range = (0.02, 0.12)
     """Edge length of distractor primitives [m]."""
+    margin: float = 0.1
+    """Clutter is placed in ``scene.placement_area`` grown by this margin [m] (kept on the table), so it stays near
+    the parts and in the camera's view."""
 
 
 @dataclass
@@ -222,6 +238,8 @@ def load_config(path: str | Path | None, overrides: list[str] | None = None) -> 
     cfg.output.dir = _resolve(base, cfg.output.dir)
     if cfg.scene.environment_usd:
         cfg.scene.environment_usd = _resolve(base, cfg.scene.environment_usd)
+    if cfg.scene.scene_usd:
+        cfg.scene.scene_usd = _resolve(base, cfg.scene.scene_usd)
     return cfg
 
 

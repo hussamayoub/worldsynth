@@ -86,3 +86,25 @@ def test_default_yaml_matches_code_defaults():
 
     yaml_cfg = load_config(Path(__file__).parents[1] / "configs" / "default.yaml")
     assert yaml_cfg == load_config(None)
+
+
+def test_orbit_trajectory_starts_at_scene_camera_and_orbits_target():
+    t0 = R.look_at([-0.6, 0.0, 1.4], [0.0, 0.0, 0.9])
+    t0[:3, :3] = t0[:3, :3] @ R.rot_z(0.2)  # some roll that must be kept
+    target = R.look_target(t0, 0.9)  # roll does not move the optical axis
+    np.testing.assert_allclose(target, [0.0, 0.0, 0.9], atol=1e-9)
+    traj = R.orbit_trajectory(t0, target, 5, azimuth=30.0, elevation=10.0, distance=0.0)
+    np.testing.assert_allclose(traj[0], t0, atol=1e-12)
+    d0 = np.linalg.norm(t0[:3, 3] - target)
+    for t in traj:
+        assert np.linalg.norm(t[:3, 3] - target) == pytest.approx(d0)
+        np.testing.assert_allclose(t[:3, :3].T @ t[:3, :3], np.eye(3), atol=1e-9)
+    assert traj[-1][2, 3] > t0[2, 3]  # positive elevation raises the camera
+    end_az = np.degrees(np.arctan2(*(traj[-1][:3, 3] - target)[1::-1]))
+    start_az = np.degrees(np.arctan2(*(t0[:3, 3] - target)[1::-1]))
+    assert (end_az - start_az + 180) % 360 - 180 == pytest.approx(30.0, abs=0.5)
+
+
+def test_look_target_without_hit_is_in_front_of_camera():
+    t = R.look_at([0, 0, 1], [1, 0, 1.5])  # looking up: never hits the plane below
+    np.testing.assert_allclose(R.look_target(t, 0.0), t[:3, 3] - t[:3, 2], atol=1e-12)

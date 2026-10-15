@@ -18,12 +18,17 @@
 #   --no-clutter       render without clutter
 #   --units U          CAD units: auto|mm|m|cm|inch (default auto; unit-less STL > 2 units is taken as mm)
 #   --class-from M     file (class = file name, default) | folder (class = parent folder)
+#   --scene USD        predesigned USD scene instead of the built-in workcell (needs --scene-surface)
+#   --scene-surface P  prim path in the scene to place the parts on (top of its bounding box)
+#   --scene-camera P   camera prim path in the scene to render from (moves by the camera.*_sweep ranges)
+#   --scene-lights-only  light the scene with its own lights only (no added randomized lights)
+#   --spark USER@HOST  Cosmos machine (default $SPARK or h@100.123.185.58)
 #   --skip-sim         reuse an existing dataset in output/NAME
 #   --skip-cosmos      only render the dataset
 #   --set KEY=VALUE    extra generate.py config override, repeatable (e.g. --set camera.distance=[0.4,0.7])
 #
 # Environment:
-#   SPARK=h@100.123.185.58          Cosmos machine
+#   SPARK=h@100.123.185.58          Cosmos machine (same as --spark)
 #   ISAACLAB_DIR=../IsaacLab        Isaac Lab checkout whose .venv runs everything
 #   WS_SSH_CONTROL=~/.ssh/ws-%C     SSH connection sharing socket (password is asked once)
 #
@@ -35,11 +40,10 @@ ISAACLAB_DIR=${ISAACLAB_DIR:-$ROOT/../IsaacLab}
 PY=$ISAACLAB_DIR/.venv/bin/python
 SPARK=${SPARK:-h@100.123.185.58}
 WS_SSH_CONTROL=${WS_SSH_CONTROL:-$HOME/.ssh/ws-%C}
-REMOTE_BASE=/home/${SPARK%%@*}/cosmos-work/worldsynth
-REMOTE_OUTPUTS=/home/${SPARK%%@*}/cosmos-work/cosmos/cookbooks/cosmos3/generator/transfer/outputs/Cosmos3-Nano
 
 CAD="" NAME="" CLIPS=20 FRAMES=61 RES=256 STEPS=50 LOOKS=1 CLUTTER=true UNITS=auto CLASS_FROM=file
 SKIP_SIM=false SKIP_COSMOS=false EXTRA=() PROMPTS=() NEGATIVE=$ROOT/configs/cosmos/negative_prompt.json
+SCENE_ARGS=()
 while [[ $# -gt 0 ]]; do
   case $1 in
     --cad) CAD=$(realpath "$2"); shift 2 ;;
@@ -54,14 +58,21 @@ while [[ $# -gt 0 ]]; do
     --no-clutter) CLUTTER=false; shift ;;
     --units) UNITS=$2; shift 2 ;;
     --class-from) CLASS_FROM=$2; shift 2 ;;
+    --scene) SCENE_ARGS+=("scene.scene_usd=$(realpath "$2")"); shift 2 ;;
+    --scene-surface) SCENE_ARGS+=("scene.scene_surface=$2"); shift 2 ;;
+    --scene-camera) SCENE_ARGS+=("scene.scene_camera=$2"); shift 2 ;;
+    --scene-lights-only) SCENE_ARGS+=("scene.scene_lights_only=true"); shift ;;
+    --spark) SPARK=$2; shift 2 ;;
     --skip-sim) SKIP_SIM=true; shift ;;
     --skip-cosmos) SKIP_COSMOS=true; shift ;;
     --set) EXTRA+=("$2"); shift 2 ;;
-    -h|--help) sed -n '2,30p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,36p' "$0"; exit 0 ;;
     *) echo "unknown option $1 (see --help)"; exit 1 ;;
   esac
 done
 [[ -n $NAME ]] || { echo "--name is required"; exit 1; }
+REMOTE_BASE=/home/${SPARK%%@*}/cosmos-work/worldsynth
+REMOTE_OUTPUTS=/home/${SPARK%%@*}/cosmos-work/cosmos/cookbooks/cosmos3/generator/transfer/outputs/Cosmos3-Nano
 case $RES in
   256) WIDTH=1200 ;;   # Cosmos 256 16:9 outputs 320x192
   480) WIDTH=1248 ;;   # Cosmos 480 16:9 outputs 832x480
@@ -71,8 +82,10 @@ esac
 DATASET=$ROOT/output/$NAME
 BATCH=$ROOT/output/${NAME}_cosmos
 REMOTE_BATCH=$REMOTE_BASE/${NAME}_cosmos
-SSH=(ssh -o ControlMaster=auto -o "ControlPath=$WS_SSH_CONTROL" -o ControlPersist=4h "$SPARK")
-RSYNC_SSH="ssh -o ControlMaster=auto -o ControlPath=$WS_SSH_CONTROL -o ControlPersist=4h"
+# accept-new: a new host key is accepted without a terminal prompt (the GUI has none); changed keys still fail
+SSH_OPTS="-o ControlMaster=auto -o ControlPath=$WS_SSH_CONTROL -o ControlPersist=4h -o ConnectTimeout=20 -o StrictHostKeyChecking=accept-new"
+SSH=(ssh $SSH_OPTS "$SPARK")
+RSYNC_SSH="ssh $SSH_OPTS"
 step() { echo; echo "=== $(date +%T) $*"; }
 
 # 1. render the dataset ------------------------------------------------------------------------------------------------
@@ -82,7 +95,7 @@ if ! $SKIP_SIM; then
   (cd "$ISAACLAB_DIR" && "$PY" "$ROOT/scripts/generate.py" --config "$ROOT/configs/default.yaml" \
     "cad.dir=$CAD" "cad.cache_dir=$ROOT/cache/usd" "cad.units=$UNITS" "cad.class_from=$CLASS_FROM" \
     "output.dir=$DATASET" "dataset.num_clips=$CLIPS" "dataset.frames_per_clip=$FRAMES" \
-    "dataset.resolution=[$WIDTH,720]" "randomization.clutter.enabled=$CLUTTER" "${EXTRA[@]}" 2>&1 \
+    "dataset.resolution=[$WIDTH,720]" "randomization.clutter.enabled=$CLUTTER" "${SCENE_ARGS[@]}" "${EXTRA[@]}" 2>&1 \
     | grep --line-buffered -E '^\[worldsynth\]|Error|Traceback|^ +File|Exception' ) || true
   [[ -f $DATASET/annotations/coco_rgb.json ]] || { echo "dataset generation failed (no COCO file)"; exit 1; }
   "$PY" "$ROOT/scripts/visualize.py" "$DATASET" --clip 0 --all --video > /dev/null

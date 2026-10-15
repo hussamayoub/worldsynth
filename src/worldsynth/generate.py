@@ -16,7 +16,7 @@ from . import cad
 from . import randomize as R
 from .config import DatasetCfg, WorldSynthCfg
 from .labels import build_coco
-from .scene import CAMERA_PATH, HORIZONTAL_APERTURE, WorkcellScene, clutter_half_height
+from .scene import CAMERA_PATH, WorkcellScene, clutter_half_height
 from .writer import FrameWriter, SceneObject, simplify_for_silhouette
 
 logger = logging.getLogger("worldsynth")
@@ -134,7 +134,7 @@ def sample_clip(
         footprints.append(R.footprint(e.part.vertices, rot))
     occupied: list[tuple[np.ndarray, float]] = []
     poses = R.place_on_table(
-        rng, footprints, cfg.scene.placement_area, scene.table_z, cfg.scene.min_spacing, occupied=occupied
+        rng, footprints, scene.placement_area, scene.table_z, cfg.scene.min_spacing, occupied=occupied
     )
     parts = [
         {"entry": idx, "pose": pose, "material": R.sample_part_material(rng, cfg.randomization.part_material)}
@@ -142,9 +142,11 @@ def sample_clip(
         if pose is not None
     ]
 
-    # clutter goes around and between the parts, anywhere on the table top
-    sx, sy, _ = cfg.scene.table.size
-    table_area = ((-sx / 2 + 0.05, sx / 2 - 0.05), (-sy / 2 + 0.05, sy / 2 - 0.05))
+    # clutter goes around and between the parts: the placement area plus a margin, on the table or surface
+    m = cfg.randomization.clutter.margin
+    (px0, px1), (py0, py1) = scene.placement_area
+    (bx0, bx1), (by0, by1) = scene.bounds
+    clutter_area = ((max(px0 - m, bx0), min(px1 + m, bx1)), (max(py0 - m, by0), min(py1 + m, by1)))
     # own random stream: switching clutter off leaves the rest of the clip unchanged
     clutter_rng = np.random.default_rng([cfg.output.seed, clip_idx, 1])
     items = R.sample_clutter(clutter_rng, cfg.randomization.clutter) if cfg.randomization.clutter.enabled else []
@@ -154,7 +156,7 @@ def sample_clip(
         box = R.footprint(np.array([-s / 2, s / 2]), np.eye(3))
         box.min_z = -clutter_half_height(it)
         clutter_fps.append(box)
-    clutter_poses = R.place_on_table(clutter_rng, clutter_fps, table_area, scene.table_z, 0.005, occupied=occupied)
+    clutter_poses = R.place_on_table(clutter_rng, clutter_fps, clutter_area, scene.table_z, 0.005, occupied=occupied)
     clutter = [
         {**it, "pose": pose, "material": R.sample_surface_material(clutter_rng, (0.2, 0.9))}
         for it, pose in zip(items, clutter_poses, strict=True)
@@ -288,8 +290,13 @@ def run(cfg: WorldSynthCfg):
         rng = np.random.default_rng([cfg.output.seed, clip_idx])
         clip = sample_clip(rng, cfg, entries, scene, clip_idx)
         objects, background = build_clip(scene, clip, entries)
-        traj = R.sample_camera_trajectory(rng, cfg.camera, scene.placement_center(), ds.frames_per_clip)
-        k = R.intrinsics(width, height, traj.focal_length, HORIZONTAL_APERTURE)
+        if scene.scene_camera is not None:
+            t0, focal, _ = scene.scene_camera
+            target = R.look_target(t0, scene.table_z)
+            traj = R.sample_orbit_trajectory(rng, cfg.camera, t0, target, ds.frames_per_clip, focal)
+        else:
+            traj = R.sample_camera_trajectory(rng, cfg.camera, scene.placement_center(), ds.frames_per_clip)
+        k = R.intrinsics(width, height, traj.focal_length, scene.horizontal_aperture)
 
         scene.set_camera(traj.transforms[0], traj.focal_length)
         for _ in range(ds.warmup_frames):

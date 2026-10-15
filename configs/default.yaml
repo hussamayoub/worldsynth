@@ -32,6 +32,11 @@ dataset:
   coco_segmentation: rle      # rle (exact) | polygon
 
 scene:
+  scene_usd: null             # predesigned USD scene instead of the built-in table/floor/walls
+  scene_surface: null         # prim path in that scene the parts are placed on (top of its bounding box)
+  surface_margin: 0.03        # keep parts this far from the surface edge
+  scene_camera: null          # camera prim path in the scene to render from (else cameras are sampled)
+  scene_lights_only: false    # true: only the scene's own lights; false: also add randomized lights
   environment_usd: null       # optional USD of the machine tending cell (machine, fixtures, robot)
   environment_pose: [0, 0, 0, 0]   # x, y, z, yaw
   table:
@@ -61,6 +66,7 @@ randomization:
     enabled: true             # false: same scenes (same seed) without clutter
     count: [0, 8]             # distractor primitives on the table (not labelled)
     size: [0.02, 0.12]
+    margin: 0.1               # clutter goes in scene.placement_area grown by this margin (near the parts)
   surface_roughness: [0.3, 0.95]
 
 camera:

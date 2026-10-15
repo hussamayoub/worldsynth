@@ -1,0 +1,144 @@
+#usda 1.0
+(
+    defaultPrim = "Cell"
+    metersPerUnit = 0.01
+    upAxis = "Y"
+)
+
+def Xform "Cell"
+{
+    def Cube "Floor"
+    {
+        color3f[] primvars:displayColor = [(0.35, 0.36, 0.38)]
+        double size = 1
+        float3 xformOp:scale = (800, 2, 800)
+        double3 xformOp:translate = (0, -1, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+    }
+
+    def Cube "WallBack"
+    {
+        color3f[] primvars:displayColor = [(0.75, 0.76, 0.74)]
+        double size = 1
+        float3 xformOp:scale = (800, 300, 4)
+        double3 xformOp:translate = (0, 150, -250)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+    }
+
+    def Cube "WallSide"
+    {
+        color3f[] primvars:displayColor = [(0.7, 0.72, 0.7)]
+        double size = 1
+        float3 xformOp:scale = (4, 300, 800)
+        double3 xformOp:translate = (-300, 150, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+    }
+
+    def "Workbench"
+    {
+        def Cube "Top"
+        {
+            color3f[] primvars:displayColor = [(0.22, 0.23, 0.25)]
+            double size = 1
+            float3 xformOp:scale = (140, 5, 80)
+            double3 xformOp:translate = (0, 90, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        }
+
+        def Cube "Leg_0"
+        {
+            color3f[] primvars:displayColor = [(0.5, 0.5, 0.52)]
+            double size = 1
+            float3 xformOp:scale = (5, 88, 5)
+            double3 xformOp:translate = (-65, 44, -35)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        }
+
+        def Cube "Leg_1"
+        {
+            color3f[] primvars:displayColor = [(0.5, 0.5, 0.52)]
+            double size = 1
+            float3 xformOp:scale = (5, 88, 5)
+            double3 xformOp:translate = (65, 44, -35)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        }
+
+        def Cube "Leg_2"
+        {
+            color3f[] primvars:displayColor = [(0.5, 0.5, 0.52)]
+            double size = 1
+            float3 xformOp:scale = (5, 88, 5)
+            double3 xformOp:translate = (-65, 44, 35)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        }
+
+        def Cube "Leg_3"
+        {
+            color3f[] primvars:displayColor = [(0.5, 0.5, 0.52)]
+            double size = 1
+            float3 xformOp:scale = (5, 88, 5)
+            double3 xformOp:translate = (65, 44, 35)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        }
+    }
+
+    def "Machine"
+    {
+        def Cube "Body"
+        {
+            color3f[] primvars:displayColor = [(0.82, 0.83, 0.8)]
+            double size = 1
+            float3 xformOp:scale = (120, 200, 100)
+            double3 xformOp:translate = (-160, 100, -60)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        }
+
+        def Cube "Door"
+        {
+            color3f[] primvars:displayColor = [(0.25, 0.35, 0.45)]
+            double size = 1
+            float3 xformOp:scale = (70, 80, 2)
+            double3 xformOp:translate = (-160, 110, -9)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        }
+    }
+
+    def "Lights"
+    {
+        def RectLight "Ceiling"
+        {
+            float inputs:height = 60
+            float inputs:intensity = 15000
+            float inputs:width = 120
+            matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 0, -1, 0), (-0, 1, -0, 0), (0, 260, 0, 1) )
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+        }
+
+        def DomeLight "Ambient"
+        {
+            float inputs:intensity = 400
+        }
+    }
+
+    def "Cameras"
+    {
+        def Camera "BenchCam"
+        {
+            float2 clippingRange = (1, 10000)
+            float focalLength = 24
+            float horizontalAperture = 20.955
+            matrix4d xformOp:transform = ( (1, -0, 0, 0), (0, 0.6912226459673645, -0.7226418571476992, 0), (-0, 0.7226418571476992, 0.6912226459673645, 0), (0, 150, 55, 1) )
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+        }
+
+        def Camera "Overview"
+        {
+            float2 clippingRange = (1, 10000)
+            float focalLength = 18
+            float horizontalAperture = 20.955
+            matrix4d xformOp:transform = ( (0.8115343414514944, 0, -0.584304725845076, 0), (-0.2234511737249141, 0.9239876421130435, -0.310348852395714, 0), (0.5398903459091, 0.3824223283522792, 0.7498477026515278, 0), (180, 220, 250, 1) )
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+        }
+    }
+}
+

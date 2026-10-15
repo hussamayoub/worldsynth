@@ -289,6 +289,64 @@ def sample_camera_trajectory(
     return CameraTrajectory(transforms=transforms, focal_length=focal, params=params)
 
 
+def rotation_about(axis, angle: float) -> np.ndarray:
+    """Rotation matrix about a unit axis (Rodrigues)."""
+    a = np.asarray(axis, dtype=float)
+    a = a / np.linalg.norm(a)
+    k = np.array([[0, -a[2], a[1]], [a[2], 0, -a[0]], [-a[1], a[0], 0]])
+    return np.eye(3) + np.sin(angle) * k + (1 - np.cos(angle)) * k @ k
+
+
+def look_target(t_cam: np.ndarray, plane_z: float, fallback_distance: float = 1.0) -> np.ndarray:
+    """Point where a USD camera's optical axis hits the plane ``z = plane_z`` (or a point in front of it)."""
+    eye, forward = t_cam[:3, 3], -t_cam[:3, 2]
+    if forward[2] < -1e-3:
+        t = (plane_z - eye[2]) / forward[2]
+        if t > 0:
+            return eye + t * forward
+    return eye + fallback_distance * forward
+
+
+def orbit_trajectory(
+    t0: np.ndarray, target, num_frames: int, azimuth: float, elevation: float, distance: float
+) -> list[np.ndarray]:
+    """Move a given camera smoothly around ``target``: ``azimuth`` [deg] about world z, ``elevation`` [deg] up or
+    down, ``distance`` [m] closer or farther. Frame 0 is exactly ``t0`` (including any roll)."""
+    target = np.asarray(target, dtype=float)
+    r0 = t0[:3, 3] - target
+    out = []
+    for i in range(num_frames):
+        s = 0.0 if num_frames == 1 else i / (num_frames - 1)
+        s = 0.5 - 0.5 * np.cos(np.pi * s)  # ease in/out, as for sampled cameras
+        rot = rotation_about([0, 0, 1], np.deg2rad(s * azimuth))
+        side = np.cross(r0, [0.0, 0.0, 1.0])
+        if np.linalg.norm(side) > 1e-6:  # positive elevation raises the camera
+            rot = rot @ rotation_about(side, np.deg2rad(s * elevation))
+        r = rot @ r0
+        r *= max(0.05, np.linalg.norm(r0) + s * distance) / np.linalg.norm(r0)
+        t = np.eye(4)
+        t[:3, :3] = rot @ t0[:3, :3]
+        t[:3, 3] = target + r
+        out.append(t)
+    return out
+
+
+def sample_orbit_trajectory(
+    rng: np.random.Generator, cfg: CameraCfg, t0: np.ndarray, target, num_frames: int, focal_length: float
+) -> CameraTrajectory:
+    """Trajectory for a fixed (scene) camera, using the ``*_sweep`` ranges of ``cfg``."""
+    az, el, dd = uniform(rng, cfg.azimuth_sweep), uniform(rng, cfg.elevation_sweep), uniform(rng, cfg.distance_sweep)
+    params = {
+        "target": np.asarray(target, dtype=float).tolist(),
+        "azimuth_sweep": az,
+        "elevation_sweep": el,
+        "distance_sweep": dd,
+        "focal_length": focal_length,
+        "start": np.asarray(t0).tolist(),
+    }
+    return CameraTrajectory(orbit_trajectory(t0, target, num_frames, az, el, dd), focal_length, params)
+
+
 def intrinsics(width: int, height: int, focal_length: float, horizontal_aperture: float) -> np.ndarray:
     """Pinhole intrinsics K [px] of a USD camera with square pixels and a centered principal point."""
     fx = focal_length / horizontal_aperture * width
@@ -334,12 +392,15 @@ def sample_surface_material(rng: np.random.Generator, roughness) -> dict:
 
 
 def sample_lights(rng: np.random.Generator, cfg: LightingCfg, area_center) -> dict:
+    """Dome and ceiling lights. ``light_height`` is relative to a floor 0.75 m below the placement surface."""
     lights = []
+    center = np.asarray(area_center, dtype=float)
+    floor_z = center[2] - 0.75 if center.size > 2 else 0.0
     for _ in range(randint(rng, cfg.num_lights)):
-        pos = np.asarray(area_center, dtype=float)[:2] + rng.uniform(-1.2, 1.2, size=2)
+        pos = center[:2] + rng.uniform(-1.2, 1.2, size=2)
         lights.append(
             {
-                "position": [float(pos[0]), float(pos[1]), uniform(rng, cfg.light_height)],
+                "position": [float(pos[0]), float(pos[1]), floor_z + uniform(rng, cfg.light_height)],
                 "size": [uniform(rng, cfg.light_size), uniform(rng, cfg.light_size)],
                 "intensity": uniform(rng, cfg.light_intensity),
                 "color_temperature": uniform(rng, cfg.light_color_temperature),

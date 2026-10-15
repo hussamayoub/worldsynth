@@ -40,6 +40,52 @@ Its dependencies (numpy, opencv, imageio-ffmpeg, pyyaml, trimesh, networkx, scip
 Only stage 1 needs Isaac Sim; the Cosmos tools, `visualize.py` and the tests run in any Python 3.12 environment
 with those packages.
 
+## GUI
+
+```bash
+cd ~/research/isaaclab/worldsynth
+scripts/gui.sh              # add --preview to render a preview of the saved setup right after start
+```
+
+One window for the whole pipeline:
+
+- **Parts:** the CAD/STL folder, units and how classes are named.
+- **Scene:** the built-in workcell, or a predesigned USD scene. After opening a scene, pick a **camera** from it
+  (or random cameras around the parts) and the **surface** to place the parts on. Set how far the camera moves
+  over a clip (± azimuth and elevation), and whether to use only the scene's own lights (the default; added random
+  lights tend to wash a lit scene out, and Cosmos then invents objects in the blank areas).
+- **Dataset:** run name, clips, frames per clip, parts per clip, clutter, and extra `key=value` config overrides.
+- **Cosmos:** resolution (256 or 480), steps, looks per clip, look and negative prompt, or "Render only".
+- **Spark:** host/IP, user and password, with **Test connection** (checks the login, the Cosmos runner and free
+  memory). The password is only passed to `ssh` in the environment of the pipeline process; it is never saved
+  (leave it empty if you use SSH keys).
+- **Preview frame** renders one labelled frame (Isaac Sim starts, ~30 s) to check camera, surface and part size.
+  **Run pipeline** runs `scripts/run_pipeline.sh` with these settings and streams its log; at the end it shows a
+  labelled Cosmos frame. **Stop** ends the local run (a Cosmos job already on the Spark finishes; run again with
+  the same name to collect it). **Open output** opens `output/<name>`.
+
+Settings are saved in `~/.config/worldsynth/gui.json` (set `WORLDSYNTH_GUI_SETTINGS` to use another file).
+
+## Using your own USD scene
+
+Any USD scene works, in any units and with y or z up (converted to meters and z up). WorldSynth references it
+instead of the built-in table and walls, places the parts on the chosen surface (the top of its bounding box, minus
+`scene.surface_margin`), adds the clutter around them, and renders from the chosen scene camera with its focal
+length and aperture. The camera moves by `camera.azimuth_sweep` / `elevation_sweep` / `distance_sweep` around the
+point it looks at; the first frame is exactly the scene camera. The scene's top-level objects are labelled so the
+whole-scene segmentation (Cosmos seg control) covers them. On the command line:
+
+```bash
+scripts/run_pipeline.sh --cad cad_lego --units mm --name scene_001 --clips 20 \
+  --scene assets/scenes/example_cell.usda --scene-surface /Cell/Workbench/Top \
+  --scene-camera /Cell/Cameras/BenchCam --scene-lights-only \
+  --set "camera.azimuth_sweep=[-10,10]" --set "camera.elevation_sweep=[-3,3]" --set "camera.distance_sweep=[0,0]"
+```
+
+`assets/scenes/example_cell.usda` (made by `scripts/make_example_scene.py`, centimeters, y up) has a workbench, a
+machine and two cameras. Prim paths are the paths inside the scene file, as the GUI lists them. The surface is
+used as an axis-aligned box, so a strongly rotated table gives a placement area that overhangs it.
+
 ## One command: `scripts/run_pipeline.sh`
 
 `run_pipeline.sh` runs everything from a CAD folder to an imported Cosmos dataset: render the clips in Isaac Sim,
@@ -62,7 +108,8 @@ scripts/run_pipeline.sh --cad cad_lego --name lego_480 --clips 1 --res 480 --uni
   --set "scene.placement_area=[[-0.12,0.12],[-0.08,0.08]]" --set "scene.parts_per_clip=[5,10]" \
   --set "scene.max_instances_per_class=2" --set "scene.min_spacing=0.005" \
   --set "randomization.part_material.randomize_prob=1.0" --set "randomization.part_material.metal_prob=0.0" \
-  --set "randomization.part_material.paint_roughness=[0.05,0.35]" --set "randomization.clutter.size=[0.01,0.04]"
+  --set "randomization.part_material.paint_roughness=[0.05,0.35]" --set "randomization.clutter.size=[0.01,0.04]" \
+  --set "randomization.clutter.margin=0.05"
 ```
 
 | Option | Meaning |
@@ -77,6 +124,9 @@ scripts/run_pipeline.sh --cad cad_lego --name lego_480 --clips 1 --res 480 --uni
 | `--no-clutter` | Render without clutter |
 | `--units mm\|m\|cm\|inch\|auto` | CAD units (default auto) |
 | `--class-from file\|folder` | Class per file name (default) or per parent folder |
+| `--scene USD`, `--scene-surface PRIM` | Predesigned scene and the prim to place parts on |
+| `--scene-camera PRIM`, `--scene-lights-only` | Render from a scene camera; light with the scene's lights only |
+| `--spark USER@HOST` | Cosmos machine (default `h@100.123.185.58`) |
 | `--set KEY=VALUE` | Any config override, repeatable |
 | `--skip-sim` | Reuse the rendered dataset (only the Cosmos part) |
 | `--skip-cosmos` | Only render the dataset |
@@ -142,6 +192,7 @@ a new CAD folder to check units and classes.
 
 - `cad_lego/`: 8 LEGO car pieces as STL (millimeters), the source files of the LEGO test runs.
 - `assets/lego/`: the same pieces converted to USD, usable directly as `--cad assets/lego --units mm`.
+- `assets/scenes/example_cell.usda`: example scene for the scene options and the GUI.
 
 ## CAD input
 
@@ -269,8 +320,9 @@ python -m pytest tests        # pure Python, no Isaac Sim needed
 
 ## Limitations of this first iteration
 
-- Parts lie on a table in stable poses; no bins, fixtures, stacking or physics-based piles yet
-  (`scene.environment_usd` can bring in a real cell, but parts are still placed on the table).
+- Parts lie on one surface in stable poses; no bins, fixtures, stacking or physics-based piles yet.
 - Materials are simple PBR (UsdPreviewSurface) without textures or wear; the dome light has no HDRI.
 - Parts with several meshes and a CAD assembly per file are treated as one rigid part.
 - One camera per clip; no wrist camera or stereo.
+- The Cosmos alignment check catches labelled parts that moved or vanished, but not extra objects Cosmos invents in
+  empty, featureless areas (e.g. an overexposed render); check the side-by-side videos.
