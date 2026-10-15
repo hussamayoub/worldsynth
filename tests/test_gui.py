@@ -1,5 +1,7 @@
 import json
 
+import yaml
+
 from worldsynth import gui
 from worldsynth.gui import GuiSettings
 
@@ -17,37 +19,70 @@ def _settings(tmp_path, **kw):
     return s
 
 
+def _sets(cmd):
+    return [cmd[i + 1] for i, c in enumerate(cmd) if c == "--set"]
+
+
 def test_password_is_never_saved(tmp_path):
-    s = _settings(tmp_path)
+    s = _settings(tmp_path, config_overrides={"dataset.fps": "10"})
     path = tmp_path / "gui.json"
     gui.save_settings(s, path)
     assert "secret" not in path.read_text() and "password" not in json.loads(path.read_text())
     loaded = gui.load_settings(path)
-    assert loaded.password == "" and loaded.spark_host == "10.0.0.5"
-    assert "secret" not in " ".join(gui.pipeline_command(s, tmp_path))
+    assert (
+        loaded.password == "" and loaded.spark_host == "10.0.0.5" and loaded.config_overrides == {"dataset.fps": "10"}
+    )
+    assert "secret" not in " ".join(gui.pipeline_command(s, tmp_path / "c.yaml", tmp_path))
 
 
-def test_pipeline_command_with_scene_camera(tmp_path):
+def test_pipeline_command_with_scene_camera_and_folders(tmp_path):
     s = _settings(
         tmp_path, use_scene=True, scene_surface="/Cell/Workbench/Top", scene_camera="/Cell/Cameras/BenchCam",
-        camera_azimuth=12, camera_elevation=4, clutter_min=2, clutter_max=5, extra="scene.min_spacing=0.005\n# note",
+        camera_azimuth=12, camera_elevation=4, clutter_min=2, clutter_max=5,
+        dataset_dir=str(tmp_path / "data"), cosmos_dir=str(tmp_path / "cos"),
     )  # fmt: skip
-    cmd = gui.pipeline_command(s, tmp_path)
+    cmd = gui.pipeline_command(s, tmp_path / "run.yaml", tmp_path)
     joined = " ".join(cmd)
     assert cmd[0].endswith("run_pipeline.sh")
-    assert "--spark u@10.0.0.5" in joined and "--name run_x" in joined
+    assert "--spark u@10.0.0.5" in joined and "--name run_x" in joined and f"--config {tmp_path / 'run.yaml'}" in joined
+    assert f"--dataset-dir {tmp_path / 'data'} --cosmos-dir {tmp_path / 'cos'}" in joined
     assert f"--scene {s.scene_usd} --scene-surface /Cell/Workbench/Top --scene-camera /Cell/Cameras/BenchCam" in joined
-    sets = [cmd[i + 1] for i, c in enumerate(cmd) if c == "--set"]
-    assert "camera.azimuth_sweep=[-12,12]" in sets and "camera.elevation_sweep=[-4,4]" in sets
-    assert "randomization.clutter.count=[2,5]" in sets and "scene.min_spacing=0.005" in sets
-    assert not any(x.startswith("#") for x in sets)
+    sets = _sets(cmd)
+    assert "camera.azimuth_sweep=[-12, 12]" in sets and "camera.elevation_sweep=[-4, 4]" in sets
+    assert "randomization.clutter.count=[2, 5]" in sets
 
 
-def test_builtin_workcell_has_no_scene_args(tmp_path):
+def test_default_folders_follow_run_name(tmp_path):
     s = _settings(tmp_path, clutter=False, render_only=True)
-    cmd = gui.pipeline_command(s, tmp_path)
+    assert gui.dataset_path(s, tmp_path) == tmp_path / "output" / "run_x"
+    assert gui.cosmos_path(s, tmp_path) == tmp_path / "output" / "run_x_cosmos"
+    cmd = gui.pipeline_command(s, tmp_path / "c.yaml", tmp_path)
     assert "--scene" not in cmd and "--no-clutter" in cmd and "--skip-cosmos" in cmd
-    assert not any(c.startswith("camera.") for c in cmd)
+    assert not any(c.startswith("camera.") for c in _sets(cmd))
+
+
+def test_run_config_merges_yaml_and_overrides(tmp_path):
+    base = tmp_path / "base.yaml"
+    base.write_text("dataset:\n  fps: 15\ncamera:\n  distance: [0.3, 0.5]\n")
+    s = _settings(tmp_path, config_file=str(base), config_overrides={"camera.distance": "[0.2, 0.4]"})
+    out = gui.write_run_config(s, tmp_path / "run.yaml")
+    data = yaml.safe_load(out.read_text())
+    assert data["dataset"]["fps"] == 15  # from the base YAML
+    assert data["camera"]["distance"] == [0.2, 0.4]  # changed on the Configuration tab
+    assert data["dataset"]["frames_per_clip"] == 61  # default
+    assert gui.validate(s) == []
+    assert gui.validate(_settings(tmp_path, config_overrides={"dataset.nope": "1"}))  # unknown key
+
+
+def test_pipeline_keys_and_config_comments(tmp_path):
+    keys = gui.pipeline_keys(_settings(tmp_path, resolution="480", clips=7), tmp_path)
+    assert keys["dataset.resolution"] == "[1248, 720]" and keys["dataset.num_clips"] == "7"
+    assert keys["output.dir"] == str(tmp_path / "output" / "run_x")
+    comments = gui.config_comments()
+    assert "seed" in comments["output.seed"] and "clutter" in comments["randomization.clutter.enabled"]
+    flat = gui.config_values(None)
+    assert set(comments) <= set(flat) | {k.rsplit(".", 1)[0] for k in flat}  # comments refer to real keys
+    assert gui.format_value((0.25, 0.5)) == "[0.25, 0.5]" and gui.format_value(None) == "null"
 
 
 def test_validate(tmp_path):
@@ -70,6 +105,8 @@ def test_ssh_env_passes_password_only_through_askpass(tmp_path, monkeypatch):
 
 def test_preview_command(tmp_path):
     s = _settings(tmp_path, use_scene=True, scene_surface="/Cell/Workbench/Top", resolution="480")
-    cmd = gui.preview_command(s, tmp_path / "prev", "/py", tmp_path)
-    assert cmd[0] == "/py" and "dataset.frames_per_clip=1" in cmd and "dataset.resolution=[1248,720]" in cmd
+    cmd = gui.preview_command(s, tmp_path / "run.yaml", tmp_path / "prev", "/py", tmp_path)
+    assert cmd[0] == "/py" and cmd[cmd.index("--config") + 1] == str(tmp_path / "run.yaml")
+    assert "dataset.frames_per_clip=1" in cmd and "dataset.resolution=[1248, 720]" in cmd
+    assert f"output.dir={tmp_path / 'prev'}" in cmd
     assert "scene.scene_surface=/Cell/Workbench/Top" in cmd and not any("scene_camera" in c for c in cmd)

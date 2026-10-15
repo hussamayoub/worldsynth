@@ -181,6 +181,7 @@ def prepare(
     controls: dict | None = None,
     video_size: tuple[int, int] | None = None,
     seed: int = 0,
+    job_prefix: str | None = None,
 ) -> dict:
     """Write a self-contained Cosmos batch folder for the clips of a dataset.
 
@@ -188,7 +189,7 @@ def prepare(
 
         <out_dir>/inputs/<clip>/{vision,depth,seg}.mp4
         <out_dir>/prompts/<job>.json   (the look plus the clip's clutter)
-        <out_dir>/specs/<job>.json     (job = <batch>__<clip>__<prompt>)
+        <out_dir>/specs/<job>.json     (job = <job_prefix>__<clip>__<prompt>)
         <out_dir>/manifest.json
         <out_dir>/run_batch.sh
 
@@ -199,6 +200,8 @@ def prepare(
         controls: Control name to settings; defaults to :data:`DEFAULT_CONTROLS`. ``edge`` is computed by Cosmos
             from the vision video, ``depth`` and ``seg`` are rendered by WorldSynth.
         video_size: Optional (width, height) to downscale the uploaded videos (e.g. the Cosmos output size).
+        job_prefix: Start of every job name, unique per batch because all jobs share one Cosmos outputs folder.
+            Defaults to the name of ``out_dir``.
     """
     dataset_dir, out_dir = Path(dataset_dir), Path(out_dir)
     meta = json.loads((dataset_dir / "dataset.json").read_text())
@@ -253,7 +256,7 @@ def prepare(
         chosen = [names[(start + j) % len(names)] for j in range(min(max(1, variants_per_clip), len(names)))]
         clutter = json.loads((clip_dir / "clip.json").read_text()).get("clutter", [])
         for prompt_name in chosen:
-            name = f"{out_dir.name}__{clip_dir.name}__{prompt_name}"  # unique across batches in one outputs dir
+            name = f"{job_prefix or out_dir.name}__{clip_dir.name}__{prompt_name}"
             spec = {"name": name, **DEFAULT_SPEC, **(spec_overrides or {})}
             spec.update(num_frames=len(frames), fps=fps)
             # one prompt per job: the look plus the clutter that is actually in this clip

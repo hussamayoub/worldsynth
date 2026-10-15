@@ -6,7 +6,10 @@
 #
 # Options:
 #   --cad DIR          folder with CAD/STL files (required unless --skip-sim)
-#   --name NAME        run name; dataset goes to output/NAME, Cosmos batch to output/NAME_cosmos (required)
+#   --name NAME        run name (required); names the Cosmos jobs and the default folders below
+#   --config YAML      base config (default configs/default.yaml); the options here override it
+#   --dataset-dir DIR  where Isaac Sim writes the dataset (default output/NAME)
+#   --cosmos-dir DIR   Cosmos batch folder; outputs are copied back to DIR/results (default output/NAME_cosmos)
 #   --clips N          number of clips (default 20)
 #   --frames N         frames per clip (default 61)
 #   --res 256|480      Cosmos resolution (default 256). Sets the matching dataset resolution:
@@ -23,7 +26,7 @@
 #   --scene-camera P   camera prim path in the scene to render from (moves by the camera.*_sweep ranges)
 #   --scene-lights-only  light the scene with its own lights only (no added randomized lights)
 #   --spark USER@HOST  Cosmos machine (default $SPARK or h@100.123.185.58)
-#   --skip-sim         reuse an existing dataset in output/NAME
+#   --skip-sim         reuse the dataset already in the dataset folder (only the Cosmos part)
 #   --skip-cosmos      only render the dataset
 #   --set KEY=VALUE    extra generate.py config override, repeatable (e.g. --set camera.distance=[0.4,0.7])
 #
@@ -43,11 +46,14 @@ WS_SSH_CONTROL=${WS_SSH_CONTROL:-$HOME/.ssh/ws-%C}
 
 CAD="" NAME="" CLIPS=20 FRAMES=61 RES=256 STEPS=50 LOOKS=1 CLUTTER=true UNITS=auto CLASS_FROM=file
 SKIP_SIM=false SKIP_COSMOS=false EXTRA=() PROMPTS=() NEGATIVE=$ROOT/configs/cosmos/negative_prompt.json
-SCENE_ARGS=()
+SCENE_ARGS=() CONFIG=$ROOT/configs/default.yaml DATASET="" BATCH=""
 while [[ $# -gt 0 ]]; do
   case $1 in
     --cad) CAD=$(realpath "$2"); shift 2 ;;
     --name) NAME=$2; shift 2 ;;
+    --config) CONFIG=$(realpath "$2"); shift 2 ;;
+    --dataset-dir) DATASET=$(realpath -m "$2"); shift 2 ;;
+    --cosmos-dir) BATCH=$(realpath -m "$2"); shift 2 ;;
     --clips) CLIPS=$2; shift 2 ;;
     --frames) FRAMES=$2; shift 2 ;;
     --res) RES=$2; shift 2 ;;
@@ -66,7 +72,7 @@ while [[ $# -gt 0 ]]; do
     --skip-sim) SKIP_SIM=true; shift ;;
     --skip-cosmos) SKIP_COSMOS=true; shift ;;
     --set) EXTRA+=("$2"); shift 2 ;;
-    -h|--help) sed -n '2,36p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,/^set -euo/{/^#/p}' "$0"; exit 0 ;;
     *) echo "unknown option $1 (see --help)"; exit 1 ;;
   esac
 done
@@ -79,9 +85,10 @@ case $RES in
   *) echo "--res must be 256 or 480"; exit 1 ;;
 esac
 
-DATASET=$ROOT/output/$NAME
-BATCH=$ROOT/output/${NAME}_cosmos
-REMOTE_BATCH=$REMOTE_BASE/${NAME}_cosmos
+DATASET=${DATASET:-$ROOT/output/$NAME}
+BATCH=${BATCH:-$ROOT/output/${NAME}_cosmos}
+JOB_PREFIX=${NAME}_cosmos   # job names and the remote batch folder follow the run name, not the local folders
+REMOTE_BATCH=$REMOTE_BASE/$JOB_PREFIX
 # accept-new: a new host key is accepted without a terminal prompt (the GUI has none); changed keys still fail
 SSH_OPTS="-o ControlMaster=auto -o ControlPath=$WS_SSH_CONTROL -o ControlPersist=4h -o ConnectTimeout=20 -o StrictHostKeyChecking=accept-new"
 SSH=(ssh $SSH_OPTS "$SPARK")
@@ -92,7 +99,7 @@ step() { echo; echo "=== $(date +%T) $*"; }
 if ! $SKIP_SIM; then
   [[ -d $CAD ]] || { echo "--cad folder not found: $CAD"; exit 1; }
   step "1/5 Isaac Sim: $CLIPS clips x $FRAMES frames at ${WIDTH}x720 from $CAD"
-  (cd "$ISAACLAB_DIR" && "$PY" "$ROOT/scripts/generate.py" --config "$ROOT/configs/default.yaml" \
+  (cd "$ISAACLAB_DIR" && "$PY" "$ROOT/scripts/generate.py" --config "$CONFIG" \
     "cad.dir=$CAD" "cad.cache_dir=$ROOT/cache/usd" "cad.units=$UNITS" "cad.class_from=$CLASS_FROM" \
     "output.dir=$DATASET" "dataset.num_clips=$CLIPS" "dataset.frames_per_clip=$FRAMES" \
     "dataset.resolution=[$WIDTH,720]" "randomization.clutter.enabled=$CLUTTER" "${SCENE_ARGS[@]}" "${EXTRA[@]}" 2>&1 \
@@ -106,7 +113,7 @@ $SKIP_COSMOS && { echo "done (dataset only): $DATASET"; exit 0; }
 # 2. Cosmos batch ------------------------------------------------------------------------------------------------------
 step "2/5 Cosmos batch ($RES, $STEPS steps, $LOOKS look(s) per clip)"
 "$PY" "$ROOT/scripts/cosmos_prepare.py" "$DATASET" --out "$BATCH" --remote_dir "$REMOTE_BATCH" \
-  --resolution "$RES" --num_steps "$STEPS" --variants_per_clip "$LOOKS" --negative_prompt "$NEGATIVE" \
+  --resolution "$RES" --num_steps "$STEPS" --variants_per_clip "$LOOKS" --negative_prompt "$NEGATIVE" --job_prefix "$JOB_PREFIX" \
   ${PROMPTS[@]+--prompts "${PROMPTS[@]}"}
 
 # 3. upload and run on the Spark ---------------------------------------------------------------------------------------
@@ -124,8 +131,8 @@ step "4/5 Cosmos running on the Spark (log: $REMOTE_BATCH.log)"
 TOTAL=$("$PY" -c "import json; print(len(json.load(open('$BATCH/manifest.json'))['jobs']))")
 LAST=""
 while ! "${SSH[@]}" "test -f $REMOTE_BATCH/DONE"; do
-  DONE=$("${SSH[@]}" "ls -d $REMOTE_OUTPUTS/${NAME}_cosmos__*/vision.mp4 2>/dev/null | wc -l")
-  NOW=$("${SSH[@]}" "tail -qn1 $REMOTE_BATCH.log; ls -t ~/cosmos-work/run_${NAME}_cosmos__*.log 2>/dev/null | grep -v _mem.log | head -1 \
+  DONE=$("${SSH[@]}" "ls -d $REMOTE_OUTPUTS/${JOB_PREFIX}__*/vision.mp4 2>/dev/null | wc -l")
+  NOW=$("${SSH[@]}" "tail -qn1 $REMOTE_BATCH.log; ls -t ~/cosmos-work/run_${JOB_PREFIX}__*.log 2>/dev/null | grep -v _mem.log | head -1 \
     | xargs -r grep -ho '[0-9]*/[0-9]* \[[^]]*\]' | tail -1" | tr '\n' ' ' || true)
   MSG="jobs done $DONE/$TOTAL, current: ${NOW:-starting}"
   [[ $MSG != "$LAST" ]] && echo "$(date +%T) $MSG"
@@ -135,12 +142,12 @@ while ! "${SSH[@]}" "test -f $REMOTE_BATCH/DONE"; do
     echo "the Cosmos batch stopped without finishing; see $SPARK:$REMOTE_BATCH.log"; exit 1
   fi
 done
-"${SSH[@]}" "grep -h '^exit' ~/cosmos-work/run_${NAME}_cosmos__*.log | sort | uniq -c"
+"${SSH[@]}" "grep -h '^exit' ~/cosmos-work/run_${JOB_PREFIX}__*.log | sort | uniq -c"
 
 # 5. copy back and import ----------------------------------------------------------------------------------------------
 step "5/5 copy outputs back and import"
 mkdir -p "$BATCH/results"
-rsync -a -e "$RSYNC_SSH" --include "${NAME}_cosmos__*/***" --exclude '*' "$SPARK:$REMOTE_OUTPUTS/" "$BATCH/results/"
+rsync -a -e "$RSYNC_SSH" --include "${JOB_PREFIX}__*/***" --exclude '*' "$SPARK:$REMOTE_OUTPUTS/" "$BATCH/results/"
 "$PY" "$ROOT/scripts/cosmos_import.py" "$DATASET" --batch "$BATCH" --results "$BATCH/results"
 for d in "$DATASET"/clips/clip_0000/rgb_cosmos*; do
   [[ -d $d ]] || continue

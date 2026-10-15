@@ -102,16 +102,6 @@ class WorkcellScene:
         # background prims get labels too, so the full-scene segmentation (Cosmos seg control) covers them
         for name, prim in self.surfaces.items():
             add_labels(prim, [f"scene_{name}"], instance_name="class")
-        if self.cfg.scene.environment_usd:
-            env = self.stage.DefinePrim("/World/Environment", "Xform")
-            env.GetReferences().AddReference(self.cfg.scene.environment_usd)
-            add_labels(env, ["scene_environment"], instance_name="class")
-            x, y, z, yaw = self.cfg.scene.environment_pose
-            t = np.eye(4)
-            c, s = np.cos(np.deg2rad(yaw)), np.sin(np.deg2rad(yaw))
-            t[:3, :3] = [[c, -s, 0], [s, c, 0], [0, 0, 1]]
-            t[:3, 3] = (x, y, z)
-            set_transform(env, t)
 
     def _load_scene(self):
         sc = self.cfg.scene
@@ -173,11 +163,9 @@ class WorkcellScene:
     # --- per clip ----------------------------------------------------------------------------------------------------
 
     def background_ids(self) -> dict[str, int]:
-        """Segmentation ids of the labelled static prims (surfaces and environment)."""
+        """Segmentation ids of the labelled static prims (workcell surfaces or the scene's objects)."""
         ids = {str(p.GetPath()): 1000 + i for i, p in enumerate(self.surfaces.values())}
         ids.update(self.scene_labels)
-        if self.cfg.scene.environment_usd:
-            ids["/World/Environment"] = 999
         return ids
 
     def placement_center(self) -> np.ndarray:

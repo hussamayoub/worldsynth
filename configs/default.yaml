@@ -37,8 +37,6 @@ scene:
   surface_margin: 0.03        # keep parts this far from the surface edge
   scene_camera: null          # camera prim path in the scene to render from (else cameras are sampled)
   scene_lights_only: false    # true: only the scene's own lights; false: also add randomized lights
-  environment_usd: null       # optional USD of the machine tending cell (machine, fixtures, robot)
-  environment_pose: [0, 0, 0, 0]   # x, y, z, yaw
   table:
     size: [1.2, 0.8, 0.75]    # table top x, y and height
   walls: true

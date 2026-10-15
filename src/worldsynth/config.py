@@ -89,10 +89,6 @@ class SceneCfg:
     ``camera.*_sweep`` ranges move it around the point it looks at. Without it, cameras are sampled as usual."""
     scene_lights_only: bool = False
     """True: light the scene with its own lights only. False: also add the randomized dome and area lights."""
-    environment_usd: str | None = None
-    """Optional USD of the machine tending cell (machine, fixtures, robot). Referenced under ``/World/Environment``."""
-    environment_pose: tuple[float, ...] = (0.0, 0.0, 0.0, 0.0)
-    """x, y, z [m] and yaw [deg] of the environment USD."""
     table: TableCfg = field(default_factory=TableCfg)
     walls: bool = True
     parts_per_clip: IntRange = (3, 8)
@@ -218,7 +214,7 @@ def _to_tuple(value):
 def load_config(path: str | Path | None, overrides: list[str] | None = None) -> WorldSynthCfg:
     """Load a YAML config and apply ``section.key=value`` overrides (values are parsed as YAML).
 
-    Relative paths (``cad.dir``, ``cad.cache_dir``, ``output.dir``, ``scene.environment_usd``) are resolved against
+    Relative paths (``cad.dir``, ``cad.cache_dir``, ``output.dir``, ``scene.scene_usd``) are resolved against
     the current working directory.
     """
     data: dict = {}
@@ -236,8 +232,6 @@ def load_config(path: str | Path | None, overrides: list[str] | None = None) -> 
     cfg.cad.dir = _resolve(base, cfg.cad.dir)
     cfg.cad.cache_dir = _resolve(base, cfg.cad.cache_dir)
     cfg.output.dir = _resolve(base, cfg.output.dir)
-    if cfg.scene.environment_usd:
-        cfg.scene.environment_usd = _resolve(base, cfg.scene.environment_usd)
     if cfg.scene.scene_usd:
         cfg.scene.scene_usd = _resolve(base, cfg.scene.scene_usd)
     return cfg

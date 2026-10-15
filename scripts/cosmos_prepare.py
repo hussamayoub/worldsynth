@@ -40,6 +40,7 @@ def main():
     parser.add_argument("--video_size", type=int, nargs=2, default=None, metavar=("W", "H"))
     parser.add_argument("--spec", nargs="*", default=[], help="Extra spec fields as key=json_value.")
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--job_prefix", default=None, help="Start of the job names (default: name of --out).")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="[worldsynth] %(message)s")
 
@@ -71,6 +72,7 @@ def main():
         controls=controls,
         video_size=tuple(args.video_size) if args.video_size else None,
         seed=args.seed,
+        job_prefix=args.job_prefix,
     )
     print(f"{len(manifest['jobs'])} Cosmos jobs in {args.out} (run_batch.sh runs them all)")
 
