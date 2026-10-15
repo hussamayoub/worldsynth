@@ -29,6 +29,13 @@
 #                      keep: parts stay where the scene puts/animates them (still labelled, random materials)
 #   --scene-lights-only  light the scene with its own lights only (no added randomized lights)
 #   --spark USER@HOST  Cosmos machine (default $SPARK or h@100.123.185.58)
+#   --demos HDF5       use recorded robot demos (Isaac Lab / Mimic HDF5) instead of rendering CAD parts: the generate
+#                      step imports them (one clip per demo and camera, with depth/segmentation if recorded) and the
+#                      fetch step also writes a copy of the HDF5 with the Cosmos images (see --demos-out)
+#   --demo-cameras L   image observations to use, comma separated (default scene_cam,wrist_cam)
+#   --max-demos N      only the first N demos
+#   --seg-names S      class names of segmentation ids, e.g. "1=robot,2=table,10-15=soup_can"
+#   --demos-out FILE   where the HDF5 with Cosmos images goes (default <dataset folder>/demos_cosmos.hdf5)
 #   --stages LIST      which steps to run, comma separated (default generate,prepare,send,fetch):
 #                        generate  render the dataset in Isaac Sim
 #                        prepare   turn the clips into Cosmos input videos (rgb/depth/seg), prompts and specs
@@ -54,6 +61,7 @@ WS_SSH_CONTROL=${WS_SSH_CONTROL:-$HOME/.ssh/ws-%C}
 
 CAD="" NAME="" CLIPS=20 FRAMES=61 RES=256 STEPS=50 LOOKS=1 CLUTTER=true UNITS=auto CLASS_FROM=file
 EXTRA=() PROMPTS=() NEGATIVE=$ROOT/configs/cosmos/negative_prompt.json
+DEMOS="" DEMO_CAMERAS=scene_cam,wrist_cam MAX_DEMOS="" SEG_NAMES="" DEMOS_OUT=""
 STAGES=generate,prepare,send,fetch SCENE_ARGS=() SCENE_PARTS="" CONFIG=$ROOT/configs/default.yaml DATASET="" BATCH=""
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -79,6 +87,11 @@ while [[ $# -gt 0 ]]; do
     --scene-parts) SCENE_ARGS+=("scene.scene_parts=$2"); SCENE_PARTS=$2; shift 2 ;;
     --scene-parts-mode) SCENE_ARGS+=("scene.scene_parts_mode=$2"); shift 2 ;;
     --spark) SPARK=$2; shift 2 ;;
+    --demos) DEMOS=$(realpath "$2"); shift 2 ;;
+    --demo-cameras) DEMO_CAMERAS=$2; shift 2 ;;
+    --max-demos) MAX_DEMOS=$2; shift 2 ;;
+    --seg-names) SEG_NAMES=$2; shift 2 ;;
+    --demos-out) DEMOS_OUT=$(realpath -m "$2"); shift 2 ;;
     --stages) STAGES=$2; shift 2 ;;
     --skip-sim) STAGES=prepare,send,fetch; shift ;;
     --skip-cosmos) STAGES=generate; shift ;;
@@ -95,7 +108,7 @@ want() { [[ ",$STAGES," == *",$1,"* ]]; }
 REMOTE_BASE=/home/${SPARK%%@*}/cosmos-work/worldsynth
 REMOTE_OUTPUTS=/home/${SPARK%%@*}/cosmos-work/cosmos/cookbooks/cosmos3/generator/transfer/outputs/Cosmos3-Nano
 case $RES in
-  256) WIDTH=1200 ;;   # Cosmos 256 16:9 outputs 320x192
+  256) WIDTH=1200 ;;   # Cosmos 256 16:9 outputs 320x192 (square demo cameras use 1:1, 256x256)
   480) WIDTH=1248 ;;   # Cosmos 480 16:9 outputs 832x480
   *) echo "--res must be 256 or 480"; exit 1 ;;
 esac
@@ -110,8 +123,13 @@ SSH=(ssh $SSH_OPTS "$SPARK")
 RSYNC_SSH="ssh $SSH_OPTS"
 step() { echo; echo "=== $(date +%T) $*"; }
 
-# 1. generate: render the dataset ---------------------------------------------------------------------------------------
-if want generate; then
+# 1. generate: import recorded demos, or render the dataset -------------------------------------------------------------
+if want generate && [[ -n $DEMOS ]]; then
+  step "generate: import demos from $DEMOS (cameras $DEMO_CAMERAS)"
+  "$PY" "$ROOT/scripts/demos.py" import --hdf5 "$DEMOS" --cameras ${DEMO_CAMERAS//,/ } --out "$DATASET" \
+    ${MAX_DEMOS:+--max_demos "$MAX_DEMOS"} ${SEG_NAMES:+--seg_names "$SEG_NAMES"}
+  echo "dataset: $DATASET"
+elif want generate; then
   if [[ -n $CAD ]]; then
     [[ -d $CAD ]] || { echo "--cad folder not found: $CAD"; exit 1; }
     CAD_ARG="cad.dir=$CAD"
@@ -183,10 +201,8 @@ if want fetch; then
   mkdir -p "$BATCH/results"
   rsync -a -e "$RSYNC_SSH" --include "${JOB_PREFIX}__*/***" --exclude '*' "$SPARK:$REMOTE_OUTPUTS/" "$BATCH/results/"
   "$PY" "$ROOT/scripts/cosmos_import.py" "$DATASET" --batch "$BATCH" --results "$BATCH/results"
-  for d in "$DATASET"/clips/clip_0000/rgb_cosmos*; do
-    [[ -d $d ]] || continue
-    "$PY" "$ROOT/scripts/visualize.py" "$DATASET" --image_dir "$(basename "$d")" --clip 0 --all --video > /dev/null
-    "$PY" "$ROOT/scripts/visualize.py" "$DATASET" --image_dir "$(basename "$d")" --all_clips --side_by_side
+  for image_dir in $(ls -d "$DATASET"/clips/*/rgb_cosmos* 2>/dev/null | xargs -rn1 basename | sort -u); do
+    "$PY" "$ROOT/scripts/visualize.py" "$DATASET" --image_dir "$image_dir" --all_clips --side_by_side
   done
   echo
   echo "dataset:          $DATASET"
@@ -194,4 +210,9 @@ if want fetch; then
   echo "Cosmos report:    $DATASET/annotations/rgb_cosmos_report.json"
   echo "Cosmos videos:    $BATCH/results/<job>/vision.mp4"
   echo "side by side:     $DATASET/viz/side_by_side_rgb_cosmos/<clip>.mp4  (render | Cosmos | labels)"
+  if [[ -n $DEMOS ]] || [[ $("$PY" -c "import json; print(json.load(open('$DATASET/dataset.json')).get('generator'))") == "worldsynth demos" ]]; then
+    OUT=${DEMOS_OUT:-$DATASET/demos_cosmos.hdf5}
+    "$PY" "$ROOT/scripts/demos.py" export --dataset "$DATASET" --out "$OUT"
+    echo "demos with Cosmos images: $OUT"
+  fi
 fi

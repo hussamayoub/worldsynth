@@ -147,3 +147,16 @@ def test_write_prompts_uses_edits_and_checks_json(tmp_path):
         gui.write_prompts(s, {"configs/cosmos/negative_prompt.json": "{broken"}, tmp_path / "out", root)
     cmd = gui.pipeline_command(s, tmp_path / "c.yaml", root, prompts=looks, negative=negative)
     assert cmd.count("--prompts") == 2 and cmd[cmd.index("--negative") + 1] == str(negative)
+
+
+def test_demos_source_command(tmp_path):
+    h5 = tmp_path / "demos.hdf5"
+    h5.write_bytes(b"")
+    s = _settings(tmp_path, source="demos", demos_hdf5=str(h5), demo_cameras="scene_cam, wrist_cam", max_demos=5,
+                  seg_names="10-15=can", cad_dir="")  # fmt: skip
+    assert gui.validate(s) == []
+    cmd = gui.pipeline_command(s, tmp_path / "c.yaml", tmp_path)
+    joined = " ".join(cmd)
+    assert f"--demos {h5} --demo-cameras scene_cam,wrist_cam --max-demos 5 --seg-names 10-15=can" in joined
+    assert "--scene" not in cmd and not _sets(cmd)
+    assert gui.validate(_settings(tmp_path, source="demos", demos_hdf5=str(tmp_path / "missing.hdf5")))

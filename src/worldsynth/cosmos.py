@@ -211,7 +211,11 @@ def prepare(
     controls = copy.deepcopy(controls or DEFAULT_CONTROLS)
     negative = json.loads(negative_prompt_file.read_text()) if negative_prompt_file else None
 
-    spec_settings = {**DEFAULT_SPEC, **(spec_overrides or {})}
+    spec_overrides = dict(spec_overrides or {})
+    if spec_overrides.get("aspect_ratio") == "auto":  # square cameras (e.g. 224 x 224 robot views) -> 1:1
+        w, h = meta["config"]["dataset"]["resolution"]
+        spec_overrides["aspect_ratio"] = "1,1" if w == h else "16,9"
+    spec_settings = {**DEFAULT_SPEC, **spec_overrides}
     output_size = COSMOS_OUTPUT_SIZES.get((str(spec_settings["resolution"]), str(spec_settings["aspect_ratio"])))
     if output_size is not None:
         check_aspect(tuple(meta["config"]["dataset"]["resolution"]), output_size)
@@ -233,28 +237,34 @@ def prepare(
         clip_dirs = [c for c in clip_dirs if c.name in wanted]
     offset = int(np.random.default_rng(seed).integers(len(names)))
     manifest = {"dataset": str(dataset_dir.resolve()), "fps": fps, "jobs": []}
+    groups: dict[str, int] = {}
     for clip_dir in clip_dirs:
         frames = sorted((clip_dir / "rgb").glob("*.png"))
         if not frames:
             continue
+        clip_info = json.loads((clip_dir / "clip.json").read_text())
         rgb = [cv2.cvtColor(cv2.imread(str(f)), cv2.COLOR_BGR2RGB) for f in frames]
         inputs = out_dir / "inputs" / clip_dir.name
         write_video(inputs / "vision.mp4", rgb, fps, video_size)
-        if "depth" in controls:
-            depth = [cv2.imread(str(clip_dir / "depth" / f.name), cv2.IMREAD_UNCHANGED) for f in frames]
-            if any(d is None for d in depth):
-                raise FileNotFoundError(f"{clip_dir}: depth control needs depth images (dataset.annotations: depth)")
-            write_video(inputs / "depth.mp4", depth_to_control(depth), fps, video_size)
-        if "seg" in controls:
-            seg = [cv2.imread(str(clip_dir / "segmentation" / f.name), cv2.IMREAD_UNCHANGED) for f in frames]
-            if any(s is None for s in seg):
-                raise FileNotFoundError(f"{clip_dir}: seg control needs segmentation (dataset.annotations)")
-            write_video(inputs / "seg.mp4", segmentation_to_control(seg, seed), fps, video_size)
+        clip_controls = dict(controls)
+        for ctrl, folder in (("depth", "depth"), ("seg", "segmentation")):
+            if ctrl not in clip_controls:
+                continue
+            images = [cv2.imread(str(clip_dir / folder / f.name), cv2.IMREAD_UNCHANGED) for f in frames]
+            if any(img is None for img in images):  # e.g. demos recorded without depth or segmentation
+                logger.warning("%s has no %s images; the %s control is left out", clip_dir.name, folder, ctrl)
+                clip_controls.pop(ctrl)
+                continue
+            video = depth_to_control(images) if ctrl == "depth" else segmentation_to_control(images, seed)
+            write_video(inputs / f"{ctrl}.mp4", video, fps, video_size)
 
-        # round-robin over the looks so every prompt gets about the same number of clips
-        start = len(manifest["jobs"]) + offset
+        # round-robin over the looks so every prompt gets about the same number of clips; clips of one group
+        # (e.g. the cameras of one recorded demo) get the same look so their views match
+        group = clip_info.get("group", clip_dir.name)
+        groups.setdefault(group, len(groups))
+        start = groups[group] * max(1, variants_per_clip) + offset
         chosen = [names[(start + j) % len(names)] for j in range(min(max(1, variants_per_clip), len(names)))]
-        clutter = json.loads((clip_dir / "clip.json").read_text()).get("clutter", [])
+        clutter = clip_info.get("clutter", [])
         for prompt_name in chosen:
             name = f"{job_prefix or out_dir.name}__{clip_dir.name}__{prompt_name}"
             spec = {"name": name, **DEFAULT_SPEC, **(spec_overrides or {})}
@@ -265,7 +275,7 @@ def prepare(
             (out_dir / "prompts" / f"{name}.json").write_text(json.dumps(prompt, indent=2))
             spec["prompt_path"] = str(remote / "prompts" / f"{name}.json")
             spec["vision_path"] = str(remote / "inputs" / clip_dir.name / "vision.mp4")
-            for ctrl, settings in controls.items():
+            for ctrl, settings in clip_controls.items():
                 spec[ctrl] = dict(settings)
                 if ctrl in ("depth", "seg"):
                     spec[ctrl]["control_path"] = str(remote / "inputs" / clip_dir.name / f"{ctrl}.mp4")

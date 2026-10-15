@@ -17,6 +17,7 @@ dependencies = [
     "trimesh>=4",
     "networkx>=3",  # trimesh stable poses
     "scipy>=1.10",
+    "h5py>=3.8",  # recorded robot demos (Isaac Lab / Mimic HDF5)
 ]
 
 [dependency-groups]

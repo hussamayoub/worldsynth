@@ -32,7 +32,9 @@ def main():
     parser.add_argument("--variants_per_clip", type=int, default=1, help="Prompts (looks) per clip.")
     parser.add_argument("--clips", type=int, nargs="*", default=None, help="Clip indices (default: all).")
     parser.add_argument("--resolution", default="480", help="Cosmos resolution preset: 256, 480, 720 or 768.")
-    parser.add_argument("--aspect_ratio", default="16,9", help="Cosmos aspect ratio, e.g. 16,9 or 1,1.")
+    parser.add_argument(
+        "--aspect_ratio", default="auto", help="Cosmos aspect ratio: 16,9, 1,1 or auto (1,1 for square images)."
+    )
     parser.add_argument("--num_steps", type=int, default=50)
     parser.add_argument("--edge", type=float, default=1.0, help="Edge control weight (0 disables).")
     parser.add_argument("--depth", type=float, default=0.5, help="Depth control weight (0 disables).")

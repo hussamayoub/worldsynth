@@ -54,6 +54,10 @@ on the right. Every start uses the defaults;
 
 **Pipeline tab**
 
+- **Source:** render CAD parts in Isaac Sim, or **Recorded demos (HDF5)** from Isaac Lab teleop/Mimic: the demos file,
+  the camera observations, how many demos and the class names of the segmentation ids (see
+  [Recorded robot demos](#recorded-robot-demos-isaac-lab--mimic-hdf5)). Step 1 then becomes **1 Import demos**, and
+  **Preview frame** shows the first frame with its labels without starting Isaac Sim.
 - **Parts:** the CAD/STL folder (optional when the scene provides the parts), units, and whether a class is a file
   or a folder.
 - **Scene:** the built-in workcell, or a predesigned USD scene. After opening a scene, pick a **camera** from it
@@ -143,6 +147,9 @@ scripts/run_pipeline.sh --cad assets/lego --name lego_480 --clips 1 --res 480 --
 | `--set KEY=VALUE` | Any config override, repeatable |
 | `--stages LIST` | Steps to run, comma separated: `generate`, `prepare` (Cosmos input videos), `send` (upload and start Cosmos, no waiting), `fetch` (wait, copy back, import); default all |
 | `--skip-sim`, `--skip-cosmos` | Same as `--stages prepare,send,fetch` / `--stages generate` |
+| `--demos HDF5` | Use recorded robot demos instead of CAD parts (next section); `--cad` and the scene options are not used |
+| `--demo-cameras LIST`, `--max-demos N` | Camera observations to use (default `scene_cam,wrist_cam`), only the first N demos |
+| `--seg-names SPEC`, `--demos-out FILE` | Class names of the segmentation ids; the HDF5 with Cosmos images (default `DATASET/demos_cosmos.hdf5`) |
 
 - **Resuming:** re-running with the same `--name` keeps finished clips, finished Cosmos jobs and copied outputs. If
   the workstation or the connection drops while Cosmos runs, Cosmos keeps running on the Spark; run the same command
@@ -150,6 +157,44 @@ scripts/run_pipeline.sh --cad assets/lego --name lego_480 --clips 1 --res 480 --
 - **Background:** `nohup scripts/run_pipeline.sh ... > run_001.log 2>&1 &`, then `tail -f run_001.log`.
 - **SSH:** the Spark password is asked once per run (`ssh-copy-id h@100.123.185.58` removes the prompt).
   `ISAACLAB_DIR` overrides the Isaac Lab checkout (default `../IsaacLab`).
+
+## Recorded robot demos (Isaac Lab / Mimic HDF5)
+
+Demos recorded with Isaac Lab (teleop, Mimic `generate_dataset.py`) can go through Cosmos the same way, so a VLA can be
+trained on photorealistic versions of the same trajectories. WorldSynth only reads the HDF5 layout of Isaac Lab's
+recorder (`data/<demo>/obs/...`); it does not depend on the robot or task package.
+
+For each camera observation `obs/<cam>` (uint8 RGB, shape `[T, H, W, 3]`) it also uses, when they were recorded:
+
+- `obs/<cam>_depth`: depth [mm], integer, shape `[T, H, W, 1]`;
+- `obs/<cam>_seg`: segmentation ids, integer, shape `[T, H, W, 1]`, 0 = background, the same id for the same object
+  in every demo (masks and 2D boxes are derived from it).
+
+Without them the clip is still usable; Cosmos is then conditioned on edges only. The kuka bin-picking task records
+both (see its README).
+
+```bash
+cd ~/research/isaaclab/worldsynth
+scripts/run_pipeline.sh --demos ../IsaacLab/datasets/kuka/binpick_generated.hdf5 --name binpick_cosmos \
+  --max-demos 10 --seg-names "1=robot,2=table,3=ground,4-5=bin,10-15=soup_can"
+```
+
+- **generate** imports every demo and camera as one clip, `clips/<demo>__<cam>` (rgb, depth, segmentation, labels,
+  COCO); failed demos are skipped. The Cosmos video keeps the camera's aspect ratio (square cameras give square
+  videos), and all cameras of one demo get the same look.
+- **fetch** also writes a copy of the HDF5 in which each camera's images are the Cosmos frames; states, actions and
+  attributes are unchanged, so it converts to LeRobot/GR00T like the original (convert both files together to train
+  on original and Cosmos demos). A demo is written only when all its cameras have Cosmos frames.
+
+The two steps also run on their own:
+
+```bash
+python scripts/demos.py import --hdf5 demos.hdf5 --cameras scene_cam wrist_cam --out output/demos --max_demos 10
+python scripts/demos.py export --dataset output/demos --out demos_cosmos.hdf5 [--keep_missing]
+```
+
+`--keep_missing` writes demos where only some cameras have Cosmos frames (e.g. only the scene camera was sent) and
+keeps the original images for the others.
 
 ## Configuration
 
@@ -285,7 +330,8 @@ $PY scripts/visualize.py output/NAME --image_dir rgb --clip 0 --all --video     
 $PY scripts/visualize.py output/NAME --image_dir rgb_cosmos --clip 0 --frames 0 30 60    # single frames as PNG
 ```
 
-Videos go to `output/NAME/viz/` (`side_by_side_rgb_cosmos/<clip>.mp4`, `<image_dir>/<clip>.mp4`). The pipeline writes
+`--clip` takes clip numbers or folder names (`--clip demo_0__scene_cam` for imported demos). Videos go to
+`output/NAME/viz/` (`side_by_side_rgb_cosmos/<clip>.mp4`, `<image_dir>/<clip>.mp4`). The pipeline writes
 the side-by-side videos of every clip after the Cosmos import.
 
 ## Cosmos Transfer details

@@ -18,7 +18,12 @@ import numpy as np
 from worldsynth.viz import draw
 
 
-def side_by_side(root: Path, image_dir: str, clips: list[int], panel_height: int = 360):
+def clip_dir_of(root: Path, clip: str) -> Path:
+    """A clip by number (``3`` -> ``clip_0003``) or by folder name (e.g. ``demo_0__scene_cam``)."""
+    return root / "clips" / (f"clip_{int(clip):04d}" if str(clip).isdigit() else str(clip))
+
+
+def side_by_side(root: Path, image_dir: str, clips: list[str], panel_height: int = 360):
     """One mp4 per clip: rendered rgb | ``image_dir`` | ``image_dir`` with labels."""
     import imageio.v2 as imageio
 
@@ -26,7 +31,7 @@ def side_by_side(root: Path, image_dir: str, clips: list[int], panel_height: int
     out_dir = root / "viz" / f"side_by_side_{image_dir}"
     out_dir.mkdir(parents=True, exist_ok=True)
     for clip in clips:
-        clip_dir = root / "clips" / f"clip_{clip:04d}"
+        clip_dir = clip_dir_of(root, clip)
         frames = []
         for lf in sorted((clip_dir / "labels").glob("*.json")):
             render = cv2.imread(str(clip_dir / "rgb" / f"{lf.stem}.png"))
@@ -48,7 +53,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("dataset")
     parser.add_argument("--image_dir", default="rgb", help="Image folder in each clip (rgb or rgb_cosmos).")
-    parser.add_argument("--clip", type=int, nargs="*", default=[0])
+    parser.add_argument("--clip", nargs="*", default=["0"], help="Clip numbers or folder names.")
     parser.add_argument("--frames", type=int, nargs="*", default=[0])
     parser.add_argument("--all", action="store_true", help="All frames of the selected clips.")
     parser.add_argument("--video", action="store_true", help="Write an mp4 per clip instead of PNGs.")
@@ -60,9 +65,7 @@ def main():
 
     root = Path(args.dataset)
     if args.all_clips:
-        args.clip = [
-            int(p.name.split("_")[1]) for p in sorted((root / "clips").glob("clip_*")) if (p / args.image_dir).is_dir()
-        ]
+        args.clip = [p.name for p in sorted((root / "clips").iterdir()) if (p / args.image_dir).is_dir()]
     if args.side_by_side:
         side_by_side(root, args.image_dir, args.clip)
         return
@@ -70,7 +73,7 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
     fps = json.loads((root / "dataset.json").read_text())["config"]["dataset"]["fps"]
     for clip in args.clip:
-        clip_dir = root / "clips" / f"clip_{clip:04d}"
+        clip_dir = clip_dir_of(root, clip)
         label_files = sorted((clip_dir / "labels").glob("*.json"))
         if not args.all:
             label_files = [clip_dir / "labels" / f"{f:06d}.json" for f in args.frames]

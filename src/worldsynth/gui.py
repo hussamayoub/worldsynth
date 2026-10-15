@@ -26,6 +26,7 @@ import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import numpy as np
 import yaml
 
 from .config import load_config
@@ -46,6 +47,16 @@ NO_SCENE_PARTS = "(none: parts only from the CAD folder)"
 
 @dataclass
 class GuiSettings:
+    source: str = "cad"
+    """``cad``: render CAD parts in Isaac Sim; ``demos``: recorded robot demos from an HDF5 file."""
+    demos_hdf5: str = ""
+    demo_cameras: str = "scene_cam,wrist_cam"
+    max_demos: int = 0
+    """0: all demos."""
+    seg_names: str = ""
+    """Class names of the demos' segmentation ids, e.g. ``1=robot,10-15=soup_can``."""
+    demos_out: str = ""
+    """HDF5 with the Cosmos images; empty: ``<dataset folder>/demos_cosmos.hdf5``."""
     cad_dir: str = ""
     units: str = "auto"
     class_from: str = "file"
@@ -224,7 +235,12 @@ def write_run_config(s: GuiSettings, path: Path = RUN_CONFIG) -> Path:
 def validate(s: GuiSettings, stages: tuple[str, ...] = STAGES, for_preview: bool = False) -> list[str]:
     """Problems that block running ``stages`` (or a preview), as messages for the user."""
     errors = []
-    if for_preview or "generate" in stages:
+    if s.source == "demos" and (for_preview or "generate" in stages):
+        if not s.demos_hdf5 or not Path(s.demos_hdf5).is_file():
+            errors.append("Choose the HDF5 file with the recorded demos.")
+        if not [c for c in s.demo_cameras.split(",") if c.strip()]:
+            errors.append("Enter the camera observations of the demos, e.g. scene_cam,wrist_cam.")
+    elif for_preview or "generate" in stages:
         scene_parts = s.use_scene and s.scene_parts
         if s.cad_dir and not Path(s.cad_dir).is_dir():
             errors.append(f"CAD folder not found: {s.cad_dir}")
@@ -336,6 +352,15 @@ def pipeline_command(
         cmd += ["--prompts", str(p)]
     if not s.clutter:
         cmd.append("--no-clutter")
+    if s.source == "demos":
+        cmd += ["--demos", s.demos_hdf5, "--demo-cameras", ",".join(c.strip() for c in s.demo_cameras.split(","))]
+        if s.max_demos > 0:
+            cmd += ["--max-demos", str(s.max_demos)]
+        if s.seg_names:
+            cmd += ["--seg-names", s.seg_names]
+        if s.demos_out:
+            cmd += ["--demos-out", s.demos_out]
+        return cmd
     cmd += scene_args(s)
     for item in common_overrides(s):
         cmd += ["--set", item]
@@ -438,7 +463,7 @@ def main():  # noqa: C901  (UI construction is long but flat)
                 v[f.name].set(getattr(s, f.name))
         state["overrides"] = dict(s.config_overrides)
         state["select"] = s
-        update_scene_state()
+        update_source_state()
         if s.use_scene and s.scene_usd:
             load_scene()
         refresh_config()
@@ -495,8 +520,40 @@ def main():  # noqa: C901  (UI construction is long but flat)
     ttk.Button(session, text="Defaults", command=lambda: apply_settings(GuiSettings())).pack(side="left", padx=6)
     ttk.Label(session, text="(starts with defaults)", foreground="#555").pack(side="left")
 
+    # source: render CAD parts, or use recorded robot demos
+    fr = section("Source")
+    src_mode = ttk.Frame(fr)
+    ttk.Radiobutton(src_mode, text="Render CAD parts in Isaac Sim", variable=v["source"], value="cad",
+                    command=lambda: update_source_state()).pack(side="left")  # fmt: skip
+    ttk.Radiobutton(src_mode, text="Recorded demos (HDF5)", variable=v["source"], value="demos",
+                    command=lambda: update_source_state()).pack(side="left", padx=8)  # fmt: skip
+    src_mode.grid(row=0, column=0, columnspan=3, sticky="w")
+
+    def browse_file(var, save=False):
+        kind = [("HDF5", "*.hdf5 *.h5"), ("All files", "*")]
+        start_dir = str(Path(var.get()).parent) if var.get() else str(ROOT)
+        f = (filedialog.asksaveasfilename(initialdir=start_dir, defaultextension=".hdf5", filetypes=kind) if save
+             else filedialog.askopenfilename(initialdir=start_dir, filetypes=kind))  # fmt: skip
+        if f:
+            var.set(f)
+
+    demo_frame = ttk.Frame(fr)
+    demo_frame.grid(row=1, column=0, columnspan=3, sticky="ew")
+    demo_frame.columnconfigure(1, weight=1)
+    row(demo_frame, 0, "Demos file", ttk.Entry(demo_frame, textvariable=v["demos_hdf5"], width=30),
+        ttk.Button(demo_frame, text="Browse...", command=lambda: browse_file(v["demos_hdf5"])))  # fmt: skip
+    row(demo_frame, 1, "Cameras", ttk.Entry(demo_frame, textvariable=v["demo_cameras"], width=30))
+    row(demo_frame, 2, "Max demos", ttk.Spinbox(demo_frame, from_=0, to=100000, textvariable=v["max_demos"], width=8))
+    row(demo_frame, 3, "Seg classes", ttk.Entry(demo_frame, textvariable=v["seg_names"], width=30))
+    row(demo_frame, 4, "Output HDF5", ttk.Entry(demo_frame, textvariable=v["demos_out"], width=30),
+        ttk.Button(demo_frame, text="Browse...", command=lambda: browse_file(v["demos_out"], save=True)))  # fmt: skip
+    hint(demo_frame, 5, "Max demos 0 = all. Seg classes name the ids of <camera>_seg, e.g. "
+                        "1=robot,2=table,3=ground,4-5=bin,10-15=soup_can. Output HDF5: copy with the Cosmos images "
+                        "(empty: <dataset folder>/demos_cosmos.hdf5)")  # fmt: skip
+
     # parts
     fr = section("Parts (CAD / STL folder)")
+    parts_frame = fr
     row(fr, 0, "Folder", ttk.Entry(fr, textvariable=v["cad_dir"], width=30),
         ttk.Button(fr, text="Browse...", command=lambda: browse_dir(v["cad_dir"])))  # fmt: skip
     row(fr, 1, "Units", ttk.Combobox(fr, textvariable=v["units"], values=["auto", "mm", "m", "cm", "inch"],
@@ -507,6 +564,7 @@ def main():  # noqa: C901  (UI construction is long but flat)
 
     # scene
     fr = section("Scene")
+    scene_frame = fr
     mode = ttk.Frame(fr)
     ttk.Radiobutton(mode, text="Built-in workcell", variable=v["use_scene"], value=False,
                     command=lambda: update_scene_state()).pack(side="left")  # fmt: skip
@@ -560,6 +618,22 @@ def main():  # noqa: C901  (UI construction is long but flat)
         for w in scene_widgets:
             with contextlib.suppress(tk.TclError):
                 w.configure(state=("readonly" if isinstance(w, ttk.Combobox) else "normal") if on else "disabled")
+
+    def set_state(widget, enabled: bool):
+        for child in widget.winfo_children():
+            with contextlib.suppress(tk.TclError):
+                ro = isinstance(child, ttk.Combobox)
+                child.configure(state=("readonly" if ro else "normal") if enabled else "disabled")
+            set_state(child, enabled)
+
+    def update_source_state():
+        demos_on = v["source"].get() == "demos"
+        set_state(demo_frame, demos_on)
+        for frame in (parts_frame, scene_frame, dataset_frame):
+            set_state(frame, not demos_on)
+        if not demos_on:
+            update_scene_state()
+        step_btns[0].configure(text="1 Import demos" if demos_on else "1 Generate (Isaac Sim)")
 
     def load_scene():
         path = v["scene_usd"].get()
@@ -615,6 +689,7 @@ def main():  # noqa: C901  (UI construction is long but flat)
 
     # dataset
     fr = section("Dataset")
+    dataset_frame = fr
     nums = ttk.Frame(fr)
     for label, key, hi in [("clips", "clips", 10000), ("frames/clip", "frames", 241)]:
         ttk.Spinbox(nums, from_=1, to=hi, textvariable=v[key], width=6).pack(side="left")
@@ -1207,8 +1282,43 @@ def main():  # noqa: C901  (UI construction is long but flat)
             write(f"config: {base_config_path(s)} + {len(s.config_overrides)} change(s) -> {config}")
         return config
 
+    def preview_demo(s: GuiSettings):
+        """First frame of the first demo with its segmentation labels, straight from the HDF5 (no Isaac Sim)."""
+        import h5py
+
+        from . import demos as dm
+        from .viz import draw
+
+        cam = s.demo_cameras.split(",")[0].strip()
+        with h5py.File(s.demos_hdf5, "r") as f:
+            name = sorted(f["data"].keys(), key=lambda n: (len(n), n))[0]
+            obs = f["data"][name]["obs"]
+            if cam not in obs:
+                messagebox.showerror("WorldSynth", f"{name} has no observation '{cam}'. It has: {', '.join(obs)}")
+                return
+            rgb = obs[cam][0]
+            seg = obs[f"{cam}_seg"][0].reshape(rgb.shape[:2]) if f"{cam}_seg" in obs else None
+            n_demos, n_frames = len(f["data"]), len(obs[cam])
+        img = rgb[..., ::-1].copy()
+        extra = "no segmentation recorded"
+        if seg is not None:
+            names = dm.parse_seg_names(s.seg_names)
+            ids = sorted(int(i) for i in np.unique(seg) if i)
+            classes = {names.get(i, f"id_{i}") for i in ids}
+            objs = dm._labels_from_segmentation(seg, names, {c: k + 1 for k, c in enumerate(sorted(classes))})
+            img = draw(img, {"camera": {}, "objects": objs})
+            extra = f"segmentation ids {ids}"
+        show_array(img, f"{name} / {cam}, frame 0 ({n_demos} demos, {n_frames} frames in this one; {extra})")
+
     def run_preview():
         s = settings()
+        if s.source == "demos":
+            errors = validate(s, for_preview=True)
+            if errors:
+                messagebox.showerror("WorldSynth", "\n".join(errors))
+                return
+            preview_demo(s)
+            return
         config = prepare(s, for_preview=True)
         if config is None:
             return
@@ -1244,7 +1354,8 @@ def main():  # noqa: C901  (UI construction is long but flat)
             if code != 0:
                 write("stopped with an error, see the log above")
                 return
-            clip = data / "clips" / "clip_0000"
+            clips = sorted((data / "clips").glob("*/rgb")) if (data / "clips").is_dir() else []
+            clip = clips[0].parent if clips else data / "clips" / "clip_0000"
             img_dir = "rgb_cosmos" if "fetch" in stages else "rgb"
             frames = sorted((clip / img_dir).glob("*.png"))
             if frames and ("generate" in stages or "fetch" in stages):
@@ -1319,7 +1430,7 @@ def main():  # noqa: C901  (UI construction is long but flat)
             stop()
         app.destroy()
 
-    update_scene_state()
+    update_source_state()
     refresh_config()
     write("WorldSynth GUI: all settings start at their defaults ('Restore last session' brings back the last run's).")
     write("The password is never saved.")

@@ -182,7 +182,7 @@ def build_coco(dataset_dir: str | Path, image_dir: str | list[str] = "rgb", out_
                     "segmentation": seg,
                     "iscrowd": int(obj["ignore"]),
                     "instance_id": obj["instance_id"],
-                    "visible_fraction": obj["visible_fraction"],
+                    "visible_fraction": obj.get("visible_fraction", 1.0),
                 }
             )
     coco = {
