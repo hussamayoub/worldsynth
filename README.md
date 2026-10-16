@@ -37,6 +37,13 @@ uv pip install --python .venv/bin/python --no-deps -e ../worldsynth
 ```
 
 Its dependencies (numpy, opencv, imageio-ffmpeg, pyyaml, trimesh, networkx, scipy, h5py) are already in that venv.
+The GUI also needs Qt (PySide6, the `gui` extra) and, on Linux with X11, the system library `libxcb-cursor0`:
+
+```bash
+uv pip install --python .venv/bin/python "PySide6-Essentials>=6.7"
+sudo apt install libxcb-cursor0
+```
+
 Cosmos runs on the DGX Spark; set it up once as described in
 [Cosmos on the DGX Spark (setup)](#cosmos-on-the-dgx-spark-setup).
 
@@ -47,8 +54,9 @@ cd ~/research/isaaclab/worldsynth
 scripts/gui.sh              # starts with the default settings; --restore loads the settings of the last run
 ```
 
-The window has four tabs on the left (Pipeline, Configuration, Prompts, Videos) and the run controls and image area
-on the right. Every start uses the defaults;
+The window (Qt) has four tabs on the left (Pipeline, Configuration, Prompts, Videos) and the run controls, image area
+and log on the right; the divider between the two sides and the one between image and log can be dragged. It follows
+the desktop's light or dark theme. Every start uses the defaults;
 **Restore last session** brings back the settings of the last run (saved in `~/.config/worldsynth/gui.json`,
 `WORLDSYNTH_GUI_SETTINGS` overrides), **Defaults** resets them.
 
@@ -519,7 +527,8 @@ scripts/demos.py               recorded robot demos (HDF5) to a dataset, and Cos
 scripts/cosmos/run_transfer.sh Cosmos job runner, copied to ~/cosmos-work/ on the Spark
 scripts/make_example_scene.py  writes assets/scenes/example_cell.usda
 src/worldsynth/                cad (load/convert), scene + scene_info (USD), randomize, generate (render loop),
-                               writer + labels (outputs, COCO), demos, cosmos, viz + videos (viewing), gui, config
+                               writer + labels (outputs, COCO), demos, cosmos, viz + videos (viewing), gui (settings,
+                               checks, commands) + gui_qt (the window), config
 assets/lego/                   8 LEGO car pieces as USD (millimeters), the parts of the test runs
 assets/scenes/example_cell.usda  example scene (centimeters, y up): workbench, conveyor, machine, two cameras,
                                own parts under /Cell/Parts (one animated on the conveyor)

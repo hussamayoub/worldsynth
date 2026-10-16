@@ -177,3 +177,28 @@ def test_demos_source_command(tmp_path):
     assert gui.training_path(s, tmp_path) == tmp_path / "lr"
     assert gui.validate(_settings(tmp_path, convert_script=str(conv)), ("convert",))  # CAD source
     assert gui.validate(_settings(tmp_path, source="demos", convert_script=str(conv), convert_args="--x"), ("convert",))
+
+
+def test_qt_window_round_trips_settings(tmp_path, monkeypatch):
+    import dataclasses
+
+    import pytest
+
+    pytest.importorskip("PySide6")
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from worldsynth import gui_qt
+
+    _app, win = gui_qt.create_window(["worldsynth"])
+    s = GuiSettings(
+        source="demos", demos_hdf5="/d.hdf5", max_demos=3, seg_names="10-15=can", keep_missing=True, cosmos_only=True,
+        convert_script="/c.py", convert_args="--in {inputs} --out {output}", cad_dir="/cad", units="mm",
+        class_from="folder", scene_parts_mode="keep", scene_lights_only=False, camera_azimuth=7.5, name="r2",
+        clips=4, frames=31, clutter=False, resolution="480", steps=30, looks=2,
+        prompt="configs/cosmos/prompts/machine_shop.json", config_overrides={"dataset.fps": "15"},
+    )  # fmt: skip
+    win.apply_settings(s)
+    assert win.settings() == s  # every field reaches a widget and comes back unchanged
+    assert win.step_btns[4].isEnabled() and not win.sections["Scene"].isVisibleTo(win)
+    win.apply_settings(dataclasses.replace(s, source="cad"))
+    assert not win.step_btns[4].isEnabled() and win.sections["Scene"].isVisibleTo(win)
+    win.close()

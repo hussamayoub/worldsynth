@@ -20,6 +20,9 @@ dependencies = [
     "h5py>=3.8",  # recorded robot demos (Isaac Lab / Mimic HDF5)
 ]
 
+[project.optional-dependencies]
+gui = ["PySide6-Essentials>=6.7"]  # the desktop GUI (Qt); the pipeline scripts do not need it
+
 [dependency-groups]
 dev = ["pytest>=8.3", "ruff>=0.11"]
 
