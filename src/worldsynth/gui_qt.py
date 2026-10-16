@@ -14,6 +14,7 @@ import subprocess
 import threading
 from collections.abc import Callable
 from pathlib import Path
+from string import Template
 
 import numpy as np
 from PySide6.QtCore import QObject, Qt, QTimer, QUrl, Signal
@@ -50,19 +51,51 @@ from PySide6.QtWidgets import (
 from . import gui as g
 from .gui import GuiSettings
 
-STYLE = """
-QGroupBox { font-weight: 600; border: 1px solid palette(mid); border-radius: 6px; margin-top: 14px;
+THEMES = {
+    # text colors keep at least ~7:1 contrast on the window background of their theme
+    "dark": {
+        "hint": "#b8bdc6", "info": "#8ab4ff", "changed": "#8ab4ff", "file": "#6ee7a0", "locked": "#9aa0a6",
+        "button": "#3b4049", "button_hover": "#474d57", "border": "#5a616b", "disabled_text": "#7d838c",
+        "accent": "#3b82f6", "accent_hover": "#2563eb", "accent_disabled": "#2c3e5c",
+        "step": "#1f3354", "step_hover": "#284273", "step_text": "#d6e4ff", "step_border": "#3e64a6",
+        "danger": "#dc2626", "danger_hover": "#b91c1c",
+    },
+    "light": {
+        "hint": "#4b5563", "info": "#1d4ed8", "changed": "#1d4ed8", "file": "#15803d", "locked": "#6b7280",
+        "button": "#f3f4f6", "button_hover": "#e5e7eb", "border": "#c4c9d0", "disabled_text": "#9ca3af",
+        "accent": "#2563eb", "accent_hover": "#1d4ed8", "accent_disabled": "#a9c1f5",
+        "step": "#e8f0fe", "step_hover": "#d7e4fd", "step_text": "#1e3a8a", "step_border": "#9db7ef",
+        "danger": "#dc2626", "danger_hover": "#b91c1c",
+    },
+}  # fmt: skip
+STYLE = Template("""
+QGroupBox { font-weight: 600; border: 1px solid $border; border-radius: 6px; margin-top: 14px;
             padding: 10px 8px 8px 8px; }
 QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }
-QLabel[role="hint"] { color: #6b7280; }
-QLabel[role="info"] { color: #2563eb; }
-QPushButton { padding: 5px 12px; }
-QPushButton#primary { background: #2563eb; color: white; border: none; border-radius: 4px; font-weight: 600; }
-QPushButton#primary:hover { background: #1d4ed8; }
-QPushButton#primary:disabled { background: #9db8f0; }
-QPushButton#step { border: 1px solid palette(mid); border-radius: 4px; }
-QPushButton#step:hover { border-color: #2563eb; }
-"""
+QLabel[role="hint"] { color: $hint; }
+QLabel[role="info"] { color: $info; }
+QPushButton { background: $button; border: 1px solid $border; border-radius: 5px; padding: 5px 12px; }
+QPushButton:hover { background: $button_hover; }
+QPushButton:disabled { color: $disabled_text; }
+QPushButton#primary { background: $accent; color: white; border: 1px solid $accent; font-weight: 600; }
+QPushButton#primary:hover { background: $accent_hover; }
+QPushButton#primary:disabled { background: $accent_disabled; border-color: $accent_disabled; color: $disabled_text; }
+QPushButton#danger:enabled { background: $danger; color: white; border-color: $danger; font-weight: 600; }
+QPushButton#danger:enabled:hover { background: $danger_hover; }
+QPushButton#step { background: $step; color: $step_text; border: 1px solid $step_border; }
+QPushButton#step:hover { background: $step_hover; border-color: $accent; }
+QPushButton#step:disabled { background: $button; color: $disabled_text; border-color: $border; }
+QLineEdit:focus, QPlainTextEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus {
+    border: 1px solid $accent; }
+""")
+
+
+def colors() -> dict[str, str]:
+    """The colors of the light or dark theme the desktop gives the application."""
+    dark = QApplication.palette().window().color().lightness() < 128
+    return THEMES["dark" if dark else "light"]
+
+
 HDF5 = "HDF5 (*.hdf5 *.h5);;All files (*)"
 TAB_PIPELINE, TAB_CONFIG, TAB_PROMPTS, TAB_VIDEOS = range(4)
 STEP_LABELS = [
@@ -619,9 +652,10 @@ class MainWindow(QMainWindow):
         lay.addWidget(self.tree, 1)
         self.config_desc = label("Select a setting to see what it does.", "")
         lay.addWidget(self.config_desc)
-        lay.addWidget(label("<span style='color:#2563eb'><b>blue</b>: changed here</span> &nbsp; "
-                            "<span style='color:#15803d'>green: from the loaded YAML</span> &nbsp; "
-                            "<span style='color:#9ca3af'>grey: set on the Pipeline tab (it wins)</span> &nbsp; "
+        c = colors()
+        lay.addWidget(label(f"<span style='color:{c['changed']}'><b>blue</b>: changed here</span> &nbsp; "
+                            f"<span style='color:{c['file']}'>green: from the loaded YAML</span> &nbsp; "
+                            f"<span style='color:{c['locked']}'>grey: set on the Pipeline tab (it wins)</span> &nbsp; "
                             "plain: default"))  # fmt: skip
         self._refreshing = False
         return page
@@ -636,7 +670,7 @@ class MainWindow(QMainWindow):
         except Exception as e:  # noqa: BLE001  (shown to the user)
             self.error(f"Configuration error: {e}")
             return
-        locked = g.pipeline_keys(s)
+        locked, c = g.pipeline_keys(s), colors()
         expanded = {k for k, it in getattr(self, "_config_nodes", {}).items() if it.isExpanded()}
         first = not getattr(self, "_config_nodes", None)
         cur = self.tree.currentItem()
@@ -657,11 +691,11 @@ class MainWindow(QMainWindow):
                     self._config_nodes[node] = it
                 parent = self._config_nodes[node]
             if key in locked:
-                text, src, color = locked[key], "Pipeline tab", QColor("#9ca3af")
+                text, src, color = locked[key], "Pipeline tab", QColor(c["locked"])
             elif key in self.overrides:
-                text, src, color = g.format_value(value), "changed here", QColor("#2563eb")
+                text, src, color = g.format_value(value), "changed here", QColor(c["changed"])
             elif from_file[key] != defaults_flat[key]:
-                text, src, color = g.format_value(value), "YAML file", QColor("#15803d")
+                text, src, color = g.format_value(value), "YAML file", QColor(c["file"])
             else:
                 text, src, color = g.format_value(value), "default", None
             it = QTreeWidgetItem(parent, [names[-1], text, src])
@@ -923,6 +957,7 @@ class MainWindow(QMainWindow):
         self.preview_btn, self.run_btn, self.stop_btn = (QPushButton("Preview frame"), QPushButton("Run all steps"),
                                                          QPushButton("Stop"))  # fmt: skip
         self.run_btn.setObjectName("primary")
+        self.stop_btn.setObjectName("danger")
         self.stop_btn.setEnabled(False)
         self.preview_btn.clicked.connect(self.run_preview)
         self.run_btn.clicked.connect(lambda: self.run_stages(g.run_all_stages(self.settings())))
@@ -1139,7 +1174,7 @@ def create_window(argv: list[str]) -> tuple[QApplication, MainWindow]:
     app = QApplication.instance() or QApplication(argv)
     app.setApplicationName("WorldSynth")
     app.setStyle("Fusion")
-    app.setStyleSheet(STYLE)
+    app.setStyleSheet(STYLE.substitute(colors()))
     win = MainWindow()
     args = argv[1:]
     if "--restore" in args:
